@@ -1,7 +1,8 @@
-# bot.py - Main Bot File (All Logic Combined)
+# bot.py - Main Bot File with Service-Based Account Management
 import os
 import asyncio
 import logging
+import base64
 from datetime import datetime
 from io import BytesIO
 from dotenv import load_dotenv
@@ -11,15 +12,16 @@ load_dotenv()
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, 
-    MessageHandler, filters, ContextTypes, ConversationHandler
+    MessageHandler, filters, ContextTypes
 )
 from telegram.constants import ParseMode
 
-# Import modules
 from database import db
 from utils import (
     format_price, escape_markdown, get_main_keyboard, get_admin_keyboard,
-    get_cancel_keyboard, generate_upi_qr, verify_payment_api, check_force_channel
+    get_cancel_keyboard, get_payment_keyboard,
+    generate_fampay_qr, verify_fampay_payment, generate_upi_qr, check_force_channel,
+    verify_payment_api  # <-- Added this import
 )
 
 # Setup logging
@@ -29,46 +31,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Conversation states
-(
-    SELECT_PRODUCT, AWAITING_UPI_PAYMENT, AWAITING_PHONE,
-    AWAITING_OTP, AWAITING_2FA, AWAITING_SESSION, AWAITING_AMOUNT,
-    AWAITING_USER_ID, AWAITING_PRICE, AWAITING_ANNOUNCE
-) = range(10)
-
-# Bot Token
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
+MERCHANT_UPI = os.getenv("MERCHANT_UPI")
 
 # ============================================================
 # START HANDLER
 # ============================================================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command handler"""
     user = update.effective_user
     await db.connect()
     
-    # Check if user exists
     existing_user = await db.get_user(user.id)
     if not existing_user:
         await db.create_user(user.id, user.username, user.full_name)
     
-    # Check force channel
     if not await check_force_channel(context, user.id):
         force_channel = os.getenv("FORCE_CHANNEL")
         try:
             chat = await context.bot.get_chat(int(force_channel))
             channel_link = f"https://t.me/{chat.username}" if chat.username else f"https://t.me/c/{str(force_channel)[4:]}"
-            
             keyboard = [
                 [InlineKeyboardButton("📢 Join Channel", url=channel_link)],
                 [InlineKeyboardButton("✅ I've Joined", callback_data="check_join")]
             ]
-            
             await update.message.reply_text(
-                f"🔒 **Please Join Our Channel First!**\n\n"
-                f"To use this bot, you must join:\n{channel_link}\n\n"
-                f"After joining, click the button below.",
+                f"🔒 **Please Join Our Channel First!**\n\nTo use this bot, you must join:\n{channel_link}\n\nAfter joining, click the button below.",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -76,13 +64,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
     
-    # Welcome message
     welcome_text = (
         f"🌟 **Welcome {escape_markdown(user.full_name)}!** 🌟\n\n"
-        "Welcome to **Premium Account Store** - Your trusted source for Telegram accounts and sessions.\n\n"
+        "Welcome to **Premium Account Store** - Your trusted source for Telegram accounts.\n\n"
         "🔹 **What we offer:**\n"
-        "• 📱 Telegram Accounts (with OTP)\n"
-        "• 🔐 Session Files (with 2FA support)\n"
+        "• 📱 Multiple Service Categories\n"
         "• 💳 Easy UPI Payments\n"
         "• 🚀 Instant Delivery\n\n"
         "Select an option below:"
@@ -98,7 +84,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # CALLBACK HANDLER
 # ============================================================
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all callback queries"""
     query = update.callback_query
     await query.answer()
     
@@ -141,14 +126,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # USER FEATURES
     # ==========================================================
     
-    # Buy Account
+    # Buy Account - Show Services
     if data == "buy_account":
-        await show_accounts(query, context)
-        return
-    
-    # Buy Session
-    if data == "buy_session":
-        await show_sessions(query, context)
+        await show_services(query, context)
         return
     
     # My Account
@@ -183,8 +163,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📞 **Support**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"Need help? Contact our support:\n\n"
             f"• Telegram: @{support_user}\n"
-            f"• Response time: Usually within 24 hours\n"
-            f"• For payment issues, send your transaction ID\n\n"
+            f"• Response time: Usually within 24 hours\n\n"
             f"We're here to help! 🤝",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 Back", callback_data="start_back")]
@@ -202,8 +181,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"**Features:**\n"
             f"• 🔒 Secure & Fast\n"
             f"• 💳 UPI Payments\n"
-            f"• 📱 Account Delivery\n"
-            f"• 🔐 Session Delivery\n"
+            f"• 📱 Multiple Service Categories\n"
             f"• 🤖 24/7 Automated\n\n"
             f"Thank you for using our service! 🌟",
             reply_markup=InlineKeyboardMarkup([
@@ -214,17 +192,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # ==========================================================
-    # ACCOUNT PURCHASE
+    # SERVICE SELECTION (User)
     # ==========================================================
-    if data.startswith("buy_acc_"):
-        await handle_account_purchase(query, context)
+    if data.startswith("service_"):
+        service_id = data.split("_")[1]
+        await show_service_details(query, context, service_id)
         return
     
-    # ==========================================================
-    # SESSION PURCHASE
-    # ==========================================================
-    if data.startswith("buy_sess_"):
-        await handle_session_purchase(query, context)
+    if data.startswith("buy_service_"):
+        service_id = data.split("_")[2]
+        await handle_service_purchase(query, context, service_id)
+        return
+    
+    if data.startswith("confirm_buy_"):
+        service_id = data.split("_")[2]
+        await confirm_service_purchase(query, context, service_id)
         return
     
     # ==========================================================
@@ -234,7 +216,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_payment_callback(query, context)
         return
     
-    if data == "verify_payment":
+    if data.startswith("verify_pay_"):
         await verify_payment(query, context)
         return
     
@@ -245,33 +227,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_admin_panel(query, context)
         return
     
-    # Admin callbacks
     if data.startswith("admin_"):
         await handle_admin_callback(query, context)
         return
-    
-    # ==========================================================
-    # PAGINATION
-    # ==========================================================
-    if data.startswith("page_"):
-        await handle_pagination(query, context)
-        return
 
 # ============================================================
-# ACCOUNT FUNCTIONS
+# SERVICE DISPLAY FUNCTIONS
 # ============================================================
-async def show_accounts(query, context):
-    """Show available accounts with pagination"""
-    page = context.user_data.get("account_page", 0)
-    limit = 5
-    offset = page * limit
+async def show_services(query, context):
+    """Show all available services to user"""
+    services = await db.get_all_services()
     
-    accounts = await db.get_available_accounts(limit, offset)
-    total = await db.get_account_count()
-    
-    if not accounts:
+    if not services:
         await query.edit_message_text(
-            "📭 **No Accounts Available**\n\nCheck back later.",
+            "📭 **No Services Available**\n\n"
+            "Check back later for new services.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 Back", callback_data="start_back")]
             ]),
@@ -280,234 +250,199 @@ async def show_accounts(query, context):
         return
     
     keyboard = []
-    for acc in accounts:
-        keyboard.append([
-            InlineKeyboardButton(
-                f"📱 {acc['phone']} - ₹{format_price(acc['price'])}",
-                callback_data=f"buy_acc_{str(acc['_id'])}"
-            )
-        ])
+    for service in services:
+        service_id = str(service["_id"])
+        available = await db.get_service_available_count(service_id)
+        
+        if available > 0:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📱 {service['name']} - ₹{format_price(service['price'])} [{available} available]",
+                    callback_data=f"service_{service_id}"
+                )
+            ])
     
-    # Pagination
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️", callback_data=f"page_{page-1}"))
-    if offset + limit < total:
-        nav_buttons.append(InlineKeyboardButton("➡️", callback_data=f"page_{page+1}"))
-    if nav_buttons:
-        keyboard.append(nav_buttons)
+    if not keyboard:
+        await query.edit_message_text(
+            "📭 **All Services Out of Stock!**\n\n"
+            "Check back later.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="start_back")]
+            ]),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
     
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="start_back")])
     
     await query.edit_message_text(
-        f"🛒 **Available Accounts**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Total: {total} accounts available\n"
-        f"Page: {page + 1}\n\n"
-        f"Select an account to purchase:",
+        "🛒 **Available Services**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Select a service to view details and purchase:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
 
-async def handle_account_purchase(query, context):
-    """Handle account purchase"""
-    account_id = query.data.split("_")[2]
-    user_id = query.from_user.id
-    
-    account = await db.db.accounts.find_one({"_id": account_id})
-    if not account or account.get("status") != "available":
-        await query.answer("⚠️ Account already sold!", alert=True)
+async def show_service_details(query, context, service_id):
+    """Show service details with purchase option"""
+    service = await db.get_service(service_id)
+    if not service or not service.get("is_active"):
+        await query.answer("⚠️ Service not available!", alert=True)
         return
     
-    price = account.get("price", 100)
+    available = await db.get_service_available_count(service_id)
+    
+    if available == 0:
+        await query.edit_message_text(
+            f"📭 **{service['name']} - Out of Stock!**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 Price: ₹{format_price(service['price'])}\n"
+            f"📝 Description: {service.get('description', 'No description')}\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"❌ No accounts available right now.\n"
+            f"Check back later!",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back to Services", callback_data="buy_account")],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="start_back")]
+            ]),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    keyboard = [
+        [InlineKeyboardButton(f"✅ Buy Now - ₹{format_price(service['price'])}", callback_data=f"buy_service_{service_id}")],
+        [InlineKeyboardButton("🔙 Back to Services", callback_data="buy_account")],
+        [InlineKeyboardButton("🏠 Main Menu", callback_data="start_back")]
+    ]
+    
+    await query.edit_message_text(
+        f"📱 **{service['name']}**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 Price: ₹{format_price(service['price'])}\n"
+        f"📦 Available: {available} accounts\n"
+        f"📝 Description: {service.get('description', 'No description')}\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Click 'Buy Now' to purchase an account from this service.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def handle_service_purchase(query, context, service_id):
+    """Handle purchase request for a service"""
+    user_id = query.from_user.id
+    
+    service = await db.get_service(service_id)
+    if not service or not service.get("is_active"):
+        await query.answer("⚠️ Service not available!", alert=True)
+        return
+    
+    available = await db.get_service_available_count(service_id)
+    if available == 0:
+        await query.answer("❌ Out of stock!", alert=True)
+        return
+    
+    price = service["price"]
     balance = await db.get_user_balance(user_id)
     
     if balance < price:
-        await query.answer(f"❌ Insufficient balance! Need ₹{format_price(price)}", alert=True)
+        keyboard = [
+            [InlineKeyboardButton("💰 Add Balance", callback_data="add_balance")],
+            [InlineKeyboardButton("🔙 Back to Service", callback_data=f"service_{service_id}")],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="start_back")]
+        ]
+        await query.edit_message_text(
+            f"❌ **Insufficient Balance!**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Service: {service['name']}\n"
+            f"💰 Price: ₹{format_price(price)}\n"
+            f"💳 Your Balance: ₹{format_price(balance)}\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"You need ₹{format_price(price - balance)} more.\n\n"
+            f"Please add balance to continue.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
         return
     
-    # Show confirmation
-    confirm_keyboard = [
+    keyboard = [
         [
-            InlineKeyboardButton("✅ Confirm Purchase", callback_data=f"confirm_acc_{account_id}"),
+            InlineKeyboardButton("✅ Confirm Purchase", callback_data=f"confirm_buy_{service_id}"),
             InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation")
         ]
     ]
     
     await query.edit_message_text(
         f"🧾 **Purchase Confirmation**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📱 Phone: `{account['phone']}`\n"
+        f"📱 Service: {service['name']}\n"
         f"💰 Price: ₹{format_price(price)}\n"
-        f"💳 Your Balance: ₹{format_price(balance)}\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"After purchase, OTP will be auto-forwarded.",
-        reply_markup=InlineKeyboardMarkup(confirm_keyboard),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def confirm_account_purchase(query, context):
-    """Confirm account purchase"""
-    account_id = query.data.split("_")[2]
-    user_id = query.from_user.id
-    
-    account = await db.db.accounts.find_one({"_id": account_id})
-    if not account or account.get("status") != "available":
-        await query.answer("⚠️ Account already sold!", alert=True)
-        return
-    
-    price = account.get("price", 100)
-    
-    # Process purchase
-    success = await db.purchase_account(account_id, user_id, price)
-    
-    if success:
-        await query.edit_message_text(
-            f"✅ **Purchase Successful!**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📱 Account: `{account['phone']}`\n"
-            f"💰 Price: ₹{format_price(price)}\n"
-            f"📩 OTP will be forwarded here automatically.\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚠️ Keep this chat open to receive OTP.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🏠 Main Menu", callback_data="start_back")]
-            ]),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        # Start OTP forwarding (simplified - actual implementation would use telethon/pyrogram)
-        logger.info(f"Account {account['phone']} purchased by {user_id}")
-    else:
-        await query.edit_message_text(
-            "❌ **Purchase Failed!**\n\nPlease try again or contact support.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="start_back")]
-            ]),
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-# ============================================================
-# SESSION FUNCTIONS
-# ============================================================
-async def show_sessions(query, context):
-    """Show available sessions"""
-    sessions = await db.db.sessions.find({"is_active": True}).to_list(length=10)
-    
-    if not sessions:
-        await query.edit_message_text(
-            "📭 **No Sessions Available**\n\nCheck back later.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="start_back")]
-            ]),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-    
-    keyboard = []
-    for sess in sessions:
-        price = sess.get("price", 100)
-        keyboard.append([
-            InlineKeyboardButton(
-                f"🔐 Session #{str(sess['_id'])[:8]} - ₹{format_price(price)}",
-                callback_data=f"buy_sess_{str(sess['_id'])}"
-            )
-        ])
-    
-    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="start_back")])
-    
-    await query.edit_message_text(
-        "🔐 **Available Sessions**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Select a session to purchase:\n"
-        "• Session file will be sent\n"
-        "• 2FA supported\n"
-        "• Instant delivery",
+        f"💳 Your Balance: ₹{format_price(balance)}\n"
+        f"📦 Available: {available} accounts\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"After purchase, account details will be sent.",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
 
-async def handle_session_purchase(query, context):
-    """Handle session purchase"""
-    session_id = query.data.split("_")[2]
+async def confirm_service_purchase(query, context, service_id):
+    """Confirm and complete service purchase"""
     user_id = query.from_user.id
     
-    session = await db.db.sessions.find_one({"_id": session_id})
-    if not session or not session.get("is_active"):
-        await query.answer("⚠️ Session already sold!", alert=True)
+    service = await db.get_service(service_id)
+    if not service or not service.get("is_active"):
+        await query.answer("⚠️ Service not available!", alert=True)
         return
     
-    price = session.get("price", 100)
-    balance = await db.get_user_balance(user_id)
-    
-    if balance < price:
-        await query.answer(f"❌ Insufficient balance! Need ₹{format_price(price)}", alert=True)
-        return
-    
-    # Confirm
-    confirm_keyboard = [
-        [
-            InlineKeyboardButton("✅ Confirm Purchase", callback_data=f"confirm_sess_{session_id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation")
-        ]
-    ]
-    
-    await query.edit_message_text(
-        f"🧾 **Session Purchase Confirmation**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔑 Session ID: #{str(session_id)[:8]}\n"
-        f"💰 Price: ₹{format_price(price)}\n"
-        f"💳 Your Balance: ₹{format_price(balance)}\n━━━━━━━━━━━━━━━━━━━━━━━",
-        reply_markup=InlineKeyboardMarkup(confirm_keyboard),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def confirm_session_purchase(query, context):
-    """Confirm session purchase"""
-    session_id = query.data.split("_")[2]
-    user_id = query.from_user.id
-    
-    session = await db.db.sessions.find_one({"_id": session_id})
-    if not session or not session.get("is_active"):
-        await query.answer("⚠️ Session already sold!", alert=True)
-        return
-    
-    price = session.get("price", 100)
+    price = service["price"]
     balance = await db.get_user_balance(user_id)
     
     if balance < price:
         await query.answer("❌ Insufficient balance!", alert=True)
         return
     
-    # Process purchase
-    await db.db.sessions.update_one(
-        {"_id": session_id},
-        {"$set": {"is_active": False, "sold_to": user_id, "sold_at": datetime.utcnow()}}
-    )
-    await db.update_user_balance(user_id, -price)
+    account = await db.purchase_account_from_service(service_id, user_id, price)
     
-    # Create session file
-    session_data = session.get("session_string", "")
-    session_file = BytesIO()
-    session_file.write(session_data.encode())
-    session_file.name = f"session_{str(session_id)[:8]}.session"
-    session_file.seek(0)
+    if not account:
+        await query.edit_message_text(
+            "❌ **Purchase Failed!**\n\n"
+            "No accounts available in this service.\n"
+            "Please try another service.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛒 View Services", callback_data="buy_account")],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="start_back")]
+            ]),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    success_text = (
+        f"✅ **Purchase Successful!**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📱 Service: {service['name']}\n"
+        f"💰 Price: ₹{format_price(price)}\n"
+        f"📱 Account: `{account['phone']}`\n"
+        f"📩 OTP will be forwarded here automatically.\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚠️ Keep this chat open to receive OTP."
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("🛒 Buy More", callback_data="buy_account")],
+        [InlineKeyboardButton("🏠 Main Menu", callback_data="start_back")]
+    ]
     
     await query.edit_message_text(
-        f"✅ **Session Purchased Successfully!**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 Price: ₹{format_price(price)}\n"
-        f"📤 Session file sent below\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚠️ Keep the file secure!",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🏠 Main Menu", callback_data="start_back")]
-        ]),
+        success_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
     
-    # Send file
-    await query.message.reply_document(
-        document=session_file,
-        caption=f"🔐 Session #{str(session_id)[:8]}"
-    )
+    if account.get("session_string"):
+        session_file = BytesIO()
+        session_file.write(account["session_string"].encode())
+        session_file.name = f"account_{account['phone']}.session"
+        session_file.seek(0)
+        
+        await query.message.reply_document(
+            document=session_file,
+            caption=f"🔐 Session file for {account['phone']}"
+        )
+    
+    logger.info(f"Service {service['name']} purchased by {user_id} - Account: {account['phone']}")
 
 # ============================================================
 # PAYMENT FUNCTIONS
 # ============================================================
 async def show_payment_options(query, context):
-    """Show payment options"""
     keyboard = [
         [
             InlineKeyboardButton("₹100", callback_data="pay_100"),
@@ -526,14 +461,14 @@ async def show_payment_options(query, context):
         "Select amount to add:\n"
         "• Minimum: ₹50\n"
         "• Maximum: ₹10,000\n"
-        "• UPI payment accepted\n\n"
+        "• UPI payment accepted\n"
+        "• QR expires in 5 minutes\n\n"
         "Click an amount below:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
 
 async def handle_payment_callback(query, context):
-    """Handle payment amount selection"""
     data = query.data
     
     if data == "pay_custom":
@@ -555,66 +490,100 @@ async def handle_payment_callback(query, context):
         await query.answer("Invalid amount!", alert=True)
 
 async def generate_payment_qr(query, context, amount):
-    """Generate payment QR code"""
     user_id = query.from_user.id
-    upi_id = os.getenv("MERCHANT_UPI")
+    upi_id = MERCHANT_UPI
     
-    # Create payment record
-    payment = await db.create_payment(user_id, amount, upi_id)
-    context.user_data["pending_payment"] = payment["transaction_id"]
+    result = await generate_fampay_qr(upi_id, amount)
     
-    # Generate QR
-    qr_bio = await generate_upi_qr(upi_id, amount, payment["transaction_id"])
+    if not result.get("success"):
+        order_id = f"LOCAL_{user_id}_{int(datetime.utcnow().timestamp())}"
+        qr_bio = await generate_upi_qr(upi_id, amount, order_id)
+        await db.create_payment(user_id, amount, order_id, upi_id)
+        context.user_data["pending_payment"] = order_id
+        
+        await query.edit_message_text(
+            f"💳 **Payment Initiated (Local QR)**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💵 Amount: ₹{format_price(amount)}\n"
+            f"🆔 Order ID: `{order_id}`\n"
+            f"📱 UPI: `{upi_id}`\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚠️ QR expires in 5 minutes",
+            reply_markup=get_payment_keyboard(order_id),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        await query.message.reply_photo(
+            photo=qr_bio,
+            caption=f"💳 **Scan to Pay ₹{format_price(amount)}**"
+        )
+        return
     
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Verify Payment", callback_data="verify_payment"),
-            InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation")
-        ]
-    ]
+    order_id = result.get("order_id")
+    qr_base64 = result.get("qr_image")
+    expires_in = result.get("expires_in", 300)
+    
+    await db.create_payment(user_id, amount, order_id, upi_id)
+    context.user_data["pending_payment"] = order_id
+    
+    try:
+        if qr_base64.startswith("data:image"):
+            qr_base64 = qr_base64.split(",")[1]
+        qr_data = base64.b64decode(qr_base64)
+        qr_bio = BytesIO(qr_data)
+        qr_bio.seek(0)
+    except:
+        qr_bio = await generate_upi_qr(upi_id, amount, order_id)
     
     await query.edit_message_text(
         f"💳 **Payment Initiated**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💵 Amount: ₹{format_price(amount)}\n"
-        f"🆔 Txn ID: `{payment['transaction_id']}`\n"
-        f"📱 UPI: `{upi_id}`\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🆔 Order ID: `{order_id}`\n"
+        f"📱 UPI: `{upi_id}`\n"
+        f"⏱️ Expires in: {expires_in // 60} minutes\n━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Scan QR or pay to UPI ID.\n"
-        f"Click 'Verify Payment' after paying.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        f"After payment, click 'Verify Payment'.",
+        reply_markup=get_payment_keyboard(order_id),
         parse_mode=ParseMode.MARKDOWN
     )
     
-    # Send QR
     await query.message.reply_photo(
         photo=qr_bio,
         caption=f"💳 **Scan to Pay ₹{format_price(amount)}**"
     )
 
 async def verify_payment(query, context):
-    """Verify payment"""
+    """Verify payment using Fampay API"""
     user_id = query.from_user.id
-    transaction_id = context.user_data.get("pending_payment")
+    order_id = query.data.split("_")[2]
     
-    if not transaction_id:
-        await query.answer("No pending payment!", alert=True)
+    pending = context.user_data.get("pending_payment")
+    if pending != order_id:
+        await query.answer("⚠️ This is not your pending payment!", alert=True)
         return
     
-    # Verify via API
-    verified = await verify_payment_api(transaction_id)
+    payment = await db.get_payment(order_id)
+    if not payment:
+        await query.answer("❌ Payment record not found!", alert=True)
+        return
     
-    if verified:
-        await db.verify_payment(transaction_id)
-        payment = await db.db.payments.find_one({"transaction_id": transaction_id})
-        amount = payment.get("amount", 0)
-        
+    if payment.get("status") == "verified":
+        await query.answer("✅ This payment is already verified!", alert=True)
+        return
+    
+    result = await verify_payment_api(order_id)  # Using the wrapper function
+    
+    if result.get("verified"):
+        await db.verify_payment(order_id)
+        amount = result.get("amount", payment.get("amount", 0))
         await db.update_user_balance(user_id, amount)
         balance = await db.get_user_balance(user_id)
+        
+        transaction_id = result.get("transaction_id", "N/A")
         
         await query.edit_message_text(
             f"✅ **Payment Verified Successfully!**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 ₹{format_price(amount)} added to wallet\n"
             f"💳 New Balance: ₹{format_price(balance)}\n"
-            f"🆔 Txn: `{transaction_id}`\n━━━━━━━━━━━━━━━━━━━━━━━",
+            f"🆔 Order ID: `{order_id}`\n"
+            f"🔑 Transaction ID: `{transaction_id}`\n━━━━━━━━━━━━━━━━━━━━━━━",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🏠 Main Menu", callback_data="start_back")]
             ]),
@@ -622,13 +591,22 @@ async def verify_payment(query, context):
         )
         context.user_data.pop("pending_payment", None)
     else:
-        await query.answer("❌ Payment not verified! Try again.", alert=True)
+        await query.edit_message_text(
+            f"❌ **Payment Verification Failed**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Order ID: `{order_id}`\n"
+            f"Status: {result.get('message', 'Payment not received')}\n\n"
+            f"Please wait a few minutes and try again.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Retry", callback_data=f"verify_pay_{order_id}")],
+                [InlineKeyboardButton("🔙 Back", callback_data="start_back")]
+            ]),
+            parse_mode=ParseMode.MARKDOWN
+        )
 
 # ============================================================
 # ADMIN FUNCTIONS
 # ============================================================
 async def show_admin_panel(query, context):
-    """Show admin panel"""
     user_id = query.from_user.id
     admins = await db.get_admins()
     
@@ -636,25 +614,17 @@ async def show_admin_panel(query, context):
         await query.answer("⛔ Unauthorized!", alert=True)
         return
     
-    # Get stats
     user_count = await db.db.users.count_documents({})
-    account_count = await db.get_account_count()
-    payment_count = await db.db.payments.count_documents({"status": "pending"})
-    
-    # Get total revenue
-    pipeline = [
-        {"$match": {"status": "sold"}},
-        {"$group": {"_id": None, "total": {"$sum": "$price"}}}
-    ]
-    revenue_result = await db.db.accounts.aggregate(pipeline).to_list(1)
-    total_revenue = revenue_result[0]["total"] if revenue_result else 0
+    service_count = await db.db.services.count_documents({"is_active": True})
+    total_accounts = await db.db.accounts.count_documents({})
+    available_accounts = await db.db.accounts.count_documents({"status": "available"})
     
     stats_text = (
         f"🔰 **Admin Dashboard**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"👥 Users: {user_count}\n"
-        f"📦 Available: {account_count}\n"
-        f"💰 Pending Payments: {payment_count}\n"
-        f"💵 Revenue: ₹{format_price(total_revenue)}\n━━━━━━━━━━━━━━━━━━━━━━━"
+        f"📋 Services: {service_count}\n"
+        f"📦 Total Accounts: {total_accounts}\n"
+        f"✅ Available: {available_accounts}\n━━━━━━━━━━━━━━━━━━━━━━━"
     )
     
     await query.edit_message_text(
@@ -664,22 +634,42 @@ async def show_admin_panel(query, context):
     )
 
 async def handle_admin_callback(query, context):
-    """Handle admin callback"""
     data = query.data
     user_id = query.from_user.id
     
-    # Check admin
     admins = await db.get_admins()
     if user_id not in admins:
         await query.answer("⛔ Unauthorized!", alert=True)
         return
     
-    # Add Account
-    if data == "admin_add_account":
-        context.user_data["admin_state"] = "add_account"
+    if data == "admin_services":
+        await admin_show_services(query, context)
+        return
+    
+    if data == "admin_new_service":
+        context.user_data["admin_state"] = "new_service_name"
         await query.edit_message_text(
-            "📱 **Add Account**\n\n"
-            "Send phone number with country code:\n"
+            "📋 **Create New Service**\n\n"
+            "Enter the service name:\n"
+            "Example: `Russia TG Fresh`, `USA TG Old`\n\n"
+            "Send `/cancel` to cancel.",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    if data.startswith("admin_edit_service_"):
+        service_id = data.split("_")[3]
+        await admin_edit_service(query, context, service_id)
+        return
+    
+    if data.startswith("admin_add_account_"):
+        service_id = data.split("_")[3]
+        context.user_data["admin_state"] = "add_account"
+        context.user_data["service_id"] = service_id
+        await query.edit_message_text(
+            "📱 **Add Account to Service**\n\n"
+            "Send the phone number with country code:\n"
             "Example: `+919876543210`\n\n"
             "Send `/cancel` to cancel.",
             reply_markup=get_cancel_keyboard(),
@@ -687,19 +677,39 @@ async def handle_admin_callback(query, context):
         )
         return
     
-    # Add Session
-    if data == "admin_add_session":
-        context.user_data["admin_state"] = "add_session"
+    if data.startswith("admin_delete_service_"):
+        service_id = data.split("_")[3]
+        await admin_delete_service(query, context, service_id)
+        return
+    
+    if data.startswith("admin_set_price_"):
+        service_id = data.split("_")[3]
+        context.user_data["admin_state"] = "set_service_price"
+        context.user_data["service_id"] = service_id
         await query.edit_message_text(
-            "🔐 **Add Session**\n\n"
-            "Send the session string:\n\n"
+            "💰 **Set Service Price**\n\n"
+            "Enter the new price for this service:\n"
+            "Example: `150`\n\n"
             "Send `/cancel` to cancel.",
             reply_markup=get_cancel_keyboard(),
             parse_mode=ParseMode.MARKDOWN
         )
         return
     
-    # Add Funds
+    if data.startswith("admin_set_desc_"):
+        service_id = data.split("_")[3]
+        context.user_data["admin_state"] = "set_service_desc"
+        context.user_data["service_id"] = service_id
+        await query.edit_message_text(
+            "📝 **Set Service Description**\n\n"
+            "Enter the description for this service:\n"
+            "Example: `Fresh Russian Telegram accounts with 2FA`\n\n"
+            "Send `/cancel` to cancel.",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
     if data == "admin_add_funds":
         context.user_data["admin_state"] = "add_funds_user"
         await query.edit_message_text(
@@ -712,12 +722,10 @@ async def handle_admin_callback(query, context):
         )
         return
     
-    # Stats
     if data == "admin_stats":
         await show_admin_panel(query, context)
         return
     
-    # Announce
     if data == "admin_announce":
         context.user_data["admin_state"] = "announce"
         context.user_data["announce_messages"] = []
@@ -731,105 +739,134 @@ async def handle_admin_callback(query, context):
         )
         return
     
-    # Settings
     if data == "admin_settings":
-        await show_admin_settings(query, context)
+        await admin_show_settings(query, context)
         return
     
-    # Users
     if data == "admin_users":
-        await show_admin_users(query, context)
+        await admin_show_users(query, context)
         return
     
-    # Admins
     if data == "admin_admins":
-        await show_admin_admins(query, context)
+        await admin_show_admins(query, context)
         return
     
-    # Stock
-    if data == "admin_stock":
-        await show_admin_stock(query, context)
-        return
-    
-    # Payments
     if data == "admin_payments":
-        await show_admin_payments(query, context)
-        return
-    
-    # Setting callbacks
-    if data == "admin_set_price":
-        context.user_data["admin_state"] = "set_price"
-        await query.edit_message_text(
-            "💰 **Set Default Price**\n\n"
-            "Enter new default price:\n"
-            "Example: `150`\n\n"
-            "Send `/cancel` to cancel.",
-            reply_markup=get_cancel_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-    
-    if data == "admin_set_support":
-        context.user_data["admin_state"] = "set_support"
-        await query.edit_message_text(
-            "📞 **Set Support Username**\n\n"
-            "Enter support username (without @):\n"
-            "Example: `support_bot`\n\n"
-            "Send `/cancel` to cancel.",
-            reply_markup=get_cancel_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-    
-    if data == "admin_set_force":
-        context.user_data["admin_state"] = "set_force"
-        await query.edit_message_text(
-            "📢 **Set Force Channel**\n\n"
-            "Enter channel ID or username:\n"
-            "Example: `-1001234567890`\n\n"
-            "Send `none` to disable.\n"
-            "Send `/cancel` to cancel.",
-            reply_markup=get_cancel_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-    
-    if data == "admin_add_admin":
-        context.user_data["admin_state"] = "add_admin"
-        await query.edit_message_text(
-            "🔑 **Add Admin**\n\n"
-            "Send user ID to add as admin:\n"
-            "Example: `123456789`\n\n"
-            "Send `/cancel` to cancel.",
-            reply_markup=get_cancel_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-    
-    if data == "admin_remove_admin":
-        context.user_data["admin_state"] = "remove_admin"
-        await query.edit_message_text(
-            "🔑 **Remove Admin**\n\n"
-            "Send user ID to remove from admin:\n"
-            "Example: `123456789`\n\n"
-            "Send `/cancel` to cancel.",
-            reply_markup=get_cancel_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await admin_show_payments(query, context)
         return
 
 # ============================================================
-# ADMIN SETTINGS & MANAGEMENT
+# ADMIN SERVICE MANAGEMENT FUNCTIONS
 # ============================================================
-async def show_admin_settings(query, context):
-    """Show admin settings panel"""
+async def admin_show_services(query, context):
+    services = await db.get_all_services()
+    
+    if not services:
+        await query.edit_message_text(
+            "📋 **No Services Found**\n\n"
+            "Create your first service using 'New Service' button.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ New Service", callback_data="admin_new_service")],
+                [InlineKeyboardButton("🔙 Back", callback_data="admin_panel")]
+            ]),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    keyboard = []
+    for service in services:
+        service_id = str(service["_id"])
+        available = await db.get_service_available_count(service_id)
+        keyboard.append([
+            InlineKeyboardButton(
+                f"📱 {service['name']} - ₹{format_price(service['price'])} [{available} accounts]",
+                callback_data=f"admin_edit_service_{service_id}"
+            )
+        ])
+    
+    keyboard.append([InlineKeyboardButton("➕ New Service", callback_data="admin_new_service")])
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="admin_panel")])
+    
+    await query.edit_message_text(
+        "📋 **Service Management**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Click a service to manage it:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def admin_edit_service(query, context, service_id):
+    service = await db.get_service(service_id)
+    if not service:
+        await query.answer("⚠️ Service not found!", alert=True)
+        return
+    
+    available = await db.get_service_available_count(service_id)
+    total = service.get("total_accounts", 0)
+    
+    keyboard = [
+        [InlineKeyboardButton("➕ Add Account", callback_data=f"admin_add_account_{service_id}")],
+        [InlineKeyboardButton("💰 Set Price", callback_data=f"admin_set_price_{service_id}")],
+        [InlineKeyboardButton("📝 Set Description", callback_data=f"admin_set_desc_{service_id}")],
+        [InlineKeyboardButton("❌ Delete Service", callback_data=f"admin_delete_service_{service_id}")],
+        [InlineKeyboardButton("🔙 Back to Services", callback_data="admin_services")],
+        [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]
+    ]
+    
+    await query.edit_message_text(
+        f"📱 **Service: {service['name']}**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 Price: ₹{format_price(service['price'])}\n"
+        f"📝 Description: {service.get('description', 'No description')}\n"
+        f"📦 Total Accounts: {total}\n"
+        f"✅ Available: {available}\n"
+        f"❌ Sold: {total - available}\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Select an action below:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def admin_delete_service(query, context, service_id):
+    service = await db.get_service(service_id)
+    if not service:
+        await query.answer("⚠️ Service not found!", alert=True)
+        return
+    
+    total = service.get("total_accounts", 0)
+    if total > 0:
+        await query.edit_message_text(
+            f"❌ **Cannot Delete Service**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Service: {service['name']}\n"
+            f"Total Accounts: {total}\n\n"
+            f"Please delete all accounts first before deleting the service.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data=f"admin_edit_service_{service_id}")],
+                [InlineKeyboardButton("🔙 Services", callback_data="admin_services")]
+            ]),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    await db.delete_service(service_id)
+    await query.edit_message_text(
+        f"✅ **Service Deleted!**\n\n"
+        f"Service '{service['name']}' has been deleted.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 Services", callback_data="admin_services")],
+            [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]
+        ]),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# ============================================================
+# ADMIN OTHER FUNCTIONS
+# ============================================================
+async def admin_show_settings(query, context):
     default_price = await db.get_settings("default_price") or 100
     support_user = await db.get_settings("support_username") or "admin"
     force_channel = await db.get_settings("force_channel") or "Not set"
     
     keyboard = [
         [
-            InlineKeyboardButton("💰 Price", callback_data="admin_set_price"),
+            InlineKeyboardButton("💰 Default Price", callback_data="admin_set_default_price"),
             InlineKeyboardButton("📞 Support", callback_data="admin_set_support")
         ],
         [
@@ -847,9 +884,7 @@ async def show_admin_settings(query, context):
         parse_mode=ParseMode.MARKDOWN
     )
 
-async def show_admin_users(query, context):
-    """Show user management"""
-    # Get last 10 users
+async def admin_show_users(query, context):
     users = await db.db.users.find({}).sort("created_at", -1).limit(10).to_list(length=10)
     
     user_list = []
@@ -868,8 +903,7 @@ async def show_admin_users(query, context):
         parse_mode=ParseMode.MARKDOWN
     )
 
-async def show_admin_admins(query, context):
-    """Show admin management"""
+async def admin_show_admins(query, context):
     admins = await db.get_admins()
     admin_list = []
     for admin in admins:
@@ -896,25 +930,7 @@ async def show_admin_admins(query, context):
         parse_mode=ParseMode.MARKDOWN
     )
 
-async def show_admin_stock(query, context):
-    """Show stock management"""
-    available = await db.get_account_count()
-    sold = await db.db.accounts.count_documents({"status": "sold"})
-    total = await db.db.accounts.count_documents({})
-    
-    await query.edit_message_text(
-        f"📦 **Stock Report**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"✅ Available: {available}\n"
-        f"❌ Sold: {sold}\n"
-        f"📊 Total: {total}\n━━━━━━━━━━━━━━━━━━━━━━━",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_panel")]
-        ]),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def show_admin_payments(query, context):
-    """Show payment management"""
+async def admin_show_payments(query, context):
     payments = await db.db.payments.find({"status": "pending"}).sort("created_at", -1).limit(10).to_list(length=10)
     
     if not payments:
@@ -922,7 +938,7 @@ async def show_admin_payments(query, context):
     else:
         payment_text = ""
         for p in payments:
-            payment_text += f"• `{p['transaction_id']}` - ₹{format_price(p['amount'])} - User: `{p['user_id']}`\n"
+            payment_text += f"• `{p['order_id']}` - ₹{format_price(p['amount'])} - User: `{p['user_id']}`\n"
     
     await query.edit_message_text(
         f"💳 **Pending Payments**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -935,15 +951,13 @@ async def show_admin_payments(query, context):
     )
 
 # ============================================================
-# MESSAGE HANDLER (Admin Inputs)
+# MESSAGE HANDLER
 # ============================================================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle text messages"""
     text = update.message.text
     user_id = update.effective_user.id
     await db.connect()
     
-    # Cancel command
     if text == "/cancel":
         context.user_data.clear()
         await update.message.reply_text(
@@ -953,19 +967,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Admin state handling
     admin_state = context.user_data.get("admin_state")
     if admin_state:
         await handle_admin_input(update, context, text)
         return
     
-    # Payment state handling
     payment_state = context.user_data.get("payment_state")
     if payment_state == "custom_amount":
         await handle_custom_amount(update, context, text)
         return
     
-    # Default response
     await update.message.reply_text(
         "Please use the buttons to navigate.",
         reply_markup=get_main_keyboard(user_id),
@@ -973,143 +984,174 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_admin_input(update, context, text):
-    """Handle admin input states"""
     state = context.user_data.get("admin_state")
-    user_id = update.effective_user.id
+    service_id = context.user_data.get("service_id")
     
-    # Add Account - Phone
+    if state == "new_service_name":
+        name = text.strip()
+        existing = await db.get_service_by_name(name)
+        if existing:
+            await update.message.reply_text(
+                "⚠️ **Service already exists!**\n\nPlease use a different name.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        context.user_data["temp_service_name"] = name
+        context.user_data["admin_state"] = "new_service_price"
+        await update.message.reply_text(
+            f"📋 **Service: {name}**\n\nEnter the price for this service:\nExample: `150`\n\nSend `/cancel` to cancel.",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    if state == "new_service_price":
+        try:
+            price = float(text)
+            name = context.user_data.get("temp_service_name")
+            context.user_data["temp_service_price"] = str(price)
+            context.user_data["admin_state"] = "new_service_desc"
+            await update.message.reply_text(
+                f"📋 **Service: {name}**\n💰 Price: ₹{format_price(price)}\n\nEnter a description for this service (optional):\nExample: `Fresh Russian Telegram accounts`\n\nSend `skip` to skip description.",
+                reply_markup=get_cancel_keyboard(),
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except ValueError:
+            await update.message.reply_text("❌ **Invalid Price**\n\nPlease enter a valid number.", parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    if state == "new_service_desc":
+        name = context.user_data.get("temp_service_name")
+        price = float(context.user_data.get("temp_service_price", 100))
+        description = text if text.lower() != "skip" else ""
+        
+        service = await db.create_service(name, price, description)
+        
+        await update.message.reply_text(
+            f"✅ **Service Created Successfully!**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📋 Name: {name}\n💰 Price: ₹{format_price(price)}\n📝 Description: {description or 'No description'}\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Now you can add accounts to this service.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Add Account", callback_data=f"admin_add_account_{str(service['_id'])}")],
+                [InlineKeyboardButton("📋 Services", callback_data="admin_services")],
+                [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]
+            ]),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        context.user_data.pop("admin_state", None)
+        context.user_data.pop("temp_service_name", None)
+        context.user_data.pop("temp_service_price", None)
+        return
+    
     if state == "add_account":
         phone = text.strip().replace(" ", "")
         if not phone.startswith("+"):
             await update.message.reply_text(
-                "❌ **Invalid Phone**\n\n"
-                "Phone must start with `+` and country code.\n"
-                "Example: `+919876543210`",
+                "❌ **Invalid Phone**\n\nPhone must start with `+` and country code.\nExample: `+919876543210`",
                 parse_mode=ParseMode.MARKDOWN
             )
             return
         
-        # Check if account exists
         existing = await db.db.accounts.find_one({"phone": phone})
         if existing:
-            await update.message.reply_text(
-                f"⚠️ Account `{phone}` already exists!",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text(f"⚠️ **Account {phone} already exists!**", parse_mode=ParseMode.MARKDOWN)
             return
         
-        # Add account
-        default_price = await db.get_settings("default_price") or 100
-        await db.add_account(phone, default_price)
+        await db.add_account_to_service(service_id, phone)
+        service = await db.get_service(service_id)
         
         await update.message.reply_text(
             f"✅ **Account Added Successfully!**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📱 Phone: `{phone}`\n"
-            f"💰 Price: ₹{format_price(default_price)}\n\n"
-            f"Account is now available for purchase.",
-            reply_markup=get_admin_keyboard(),
+            f"📱 Phone: `{phone}`\n📋 Service: {service['name']}\n💰 Price: ₹{format_price(service['price'])}\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Add more accounts or go back.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Add Another", callback_data=f"admin_add_account_{service_id}")],
+                [InlineKeyboardButton("🔙 Service Details", callback_data=f"admin_edit_service_{service_id}")],
+                [InlineKeyboardButton("📋 Services", callback_data="admin_services")]
+            ]),
             parse_mode=ParseMode.MARKDOWN
         )
         context.user_data.pop("admin_state", None)
+        context.user_data.pop("service_id", None)
         return
     
-    # Add Session
-    if state == "add_session":
-        session_string = text.strip()
-        
-        # Check if exists
-        existing = await db.db.sessions.find_one({"session_string": session_string})
-        if existing:
+    if state == "set_service_price":
+        try:
+            price = float(text)
+            await db.update_service(service_id, {"price": price})
+            service = await db.get_service(service_id)
             await update.message.reply_text(
-                "⚠️ Session already exists!",
+                f"✅ **Price Updated!**\n━━━━━━━━━━━━━━━━━━━━━━━\n📋 Service: {service['name']}\n💰 New Price: ₹{format_price(price)}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Service Details", callback_data=f"admin_edit_service_{service_id}")],
+                    [InlineKeyboardButton("📋 Services", callback_data="admin_services")]
+                ]),
                 parse_mode=ParseMode.MARKDOWN
             )
-            return
-        
-        # Add session
-        default_price = await db.get_settings("default_price") or 100
-        session_data = {
-            "session_string": session_string,
-            "price": default_price,
-            "is_active": True,
-            "created_at": datetime.utcnow()
-        }
-        await db.db.sessions.insert_one(session_data)
-        
+            context.user_data.pop("admin_state", None)
+            context.user_data.pop("service_id", None)
+        except ValueError:
+            await update.message.reply_text("❌ **Invalid Price**\n\nPlease enter a valid number.", parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    if state == "set_service_desc":
+        description = text.strip()
+        await db.update_service(service_id, {"description": description})
+        service = await db.get_service(service_id)
         await update.message.reply_text(
-            f"✅ **Session Added Successfully!**\n\n"
-            f"Price: ₹{format_price(default_price)}",
-            reply_markup=get_admin_keyboard(),
+            f"✅ **Description Updated!**\n━━━━━━━━━━━━━━━━━━━━━━━\n📋 Service: {service['name']}\n📝 New Description: {description}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Service Details", callback_data=f"admin_edit_service_{service_id}")],
+                [InlineKeyboardButton("📋 Services", callback_data="admin_services")]
+            ]),
             parse_mode=ParseMode.MARKDOWN
         )
         context.user_data.pop("admin_state", None)
+        context.user_data.pop("service_id", None)
         return
     
-    # Add Funds - User ID
     if state == "add_funds_user":
         try:
             target_id = int(text)
             context.user_data["fund_target"] = target_id
             context.user_data["admin_state"] = "add_funds_amount"
             await update.message.reply_text(
-                f"💰 **Enter Amount**\n\n"
-                f"Amount to credit to `{target_id}`:",
+                f"💰 **Enter Amount**\n\nAmount to credit to `{target_id}`:",
                 reply_markup=get_cancel_keyboard(),
                 parse_mode=ParseMode.MARKDOWN
             )
         except ValueError:
-            await update.message.reply_text(
-                "❌ **Invalid User ID**\n\n"
-                "Send a numeric ID.",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text("❌ **Invalid User ID**\n\nSend a numeric ID.", parse_mode=ParseMode.MARKDOWN)
         return
     
-    # Add Funds - Amount
     if state == "add_funds_amount":
         try:
             amount = float(text)
             target_id = context.user_data.get("fund_target")
-            
             await db.update_user_balance(target_id, amount)
             balance = await db.get_user_balance(target_id)
-            
             await update.message.reply_text(
-                f"✅ **Funds Added!**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"User: `{target_id}`\n"
-                f"Added: ₹{format_price(amount)}\n"
-                f"New Balance: ₹{format_price(balance)}",
+                f"✅ **Funds Added!**\n━━━━━━━━━━━━━━━━━━━━━━━\nUser: `{target_id}`\nAdded: ₹{format_price(amount)}\nNew Balance: ₹{format_price(balance)}",
                 reply_markup=get_admin_keyboard(),
                 parse_mode=ParseMode.MARKDOWN
             )
             context.user_data.pop("admin_state", None)
             context.user_data.pop("fund_target", None)
         except ValueError:
-            await update.message.reply_text(
-                "❌ **Invalid Amount**\n\n"
-                "Send a valid number.",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text("❌ **Invalid Amount**\n\nSend a valid number.", parse_mode=ParseMode.MARKDOWN)
         return
     
-    # Announce
     if state == "announce":
         if text == "/done":
             messages = context.user_data.get("announce_messages", [])
             if not messages:
-                await update.message.reply_text(
-                    "❌ No messages to broadcast!",
-                    parse_mode=ParseMode.MARKDOWN
-                )
+                await update.message.reply_text("❌ No messages to broadcast!", parse_mode=ParseMode.MARKDOWN)
                 return
             
-            # Broadcast
             users = await db.db.users.find({}).to_list(length=None)
             success = 0
-            progress = await update.message.reply_text(
-                f"⏳ Broadcasting to {len(users)} users...",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            progress = await update.message.reply_text(f"⏳ Broadcasting to {len(users)} users...", parse_mode=ParseMode.MARKDOWN)
             
             for i, user in enumerate(users):
                 try:
@@ -1117,16 +1159,12 @@ async def handle_admin_input(update, context, text):
                         await msg.copy(user["user_id"])
                     success += 1
                     if (i + 1) % 10 == 0:
-                        await progress.edit_text(
-                            f"⏳ Progress: {success}/{len(users)}",
-                            parse_mode=ParseMode.MARKDOWN
-                        )
+                        await progress.edit_text(f"⏳ Progress: {success}/{len(users)}", parse_mode=ParseMode.MARKDOWN)
                 except:
                     continue
             
             await progress.edit_text(
-                f"✅ **Broadcast Complete!**\n\n"
-                f"Sent to: {success}/{len(users)} users",
+                f"✅ **Broadcast Complete!**\n\nSent to: {success}/{len(users)} users",
                 reply_markup=get_admin_keyboard(),
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -1135,217 +1173,149 @@ async def handle_admin_input(update, context, text):
         else:
             context.user_data["announce_messages"].append(update.message)
             await update.message.reply_text(
-                f"📥 **Message Captured**\n\n"
-                f"Messages: {len(context.user_data['announce_messages'])}\n"
-                f"Send `/done` to broadcast.",
+                f"📥 **Message Captured**\n\nMessages: {len(context.user_data['announce_messages'])}\nSend `/done` to broadcast.",
                 parse_mode=ParseMode.MARKDOWN
             )
         return
     
-    # Set Price
-    if state == "set_price":
+    if state == "set_default_price":
         try:
             price = float(text)
             await db.update_settings("default_price", price)
             await update.message.reply_text(
-                f"✅ **Price Updated!**\n\n"
-                f"New default price: ₹{format_price(price)}",
+                f"✅ **Default Price Updated!**\n\nNew default price: ₹{format_price(price)}",
                 reply_markup=get_admin_keyboard(),
                 parse_mode=ParseMode.MARKDOWN
             )
             context.user_data.pop("admin_state", None)
         except ValueError:
-            await update.message.reply_text(
-                "❌ **Invalid Price**\n\n"
-                "Send a valid number.",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text("❌ **Invalid Price**\n\nSend a valid number.", parse_mode=ParseMode.MARKDOWN)
         return
     
-    # Set Support
     if state == "set_support":
         username = text.strip().replace("@", "")
         await db.update_settings("support_username", username)
         await update.message.reply_text(
-            f"✅ **Support Updated!**\n\n"
-            f"New support: @{username}",
+            f"✅ **Support Updated!**\n\nNew support: @{username}",
             reply_markup=get_admin_keyboard(),
             parse_mode=ParseMode.MARKDOWN
         )
         context.user_data.pop("admin_state", None)
         return
     
-    # Set Force Channel
     if state == "set_force":
         if text.lower() == "none":
             await db.update_settings("force_channel", None)
-            await update.message.reply_text(
-                "✅ **Force Channel Disabled**",
-                reply_markup=get_admin_keyboard(),
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text("✅ **Force Channel Disabled**", reply_markup=get_admin_keyboard(), parse_mode=ParseMode.MARKDOWN)
         else:
             await db.update_settings("force_channel", text)
-            await update.message.reply_text(
-                f"✅ **Force Channel Set**\n\n"
-                f"Channel: {text}",
-                reply_markup=get_admin_keyboard(),
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text(f"✅ **Force Channel Set**\n\nChannel: {text}", reply_markup=get_admin_keyboard(), parse_mode=ParseMode.MARKDOWN)
         context.user_data.pop("admin_state", None)
         return
     
-    # Add Admin
     if state == "add_admin":
         try:
             target_id = int(text)
             if target_id == OWNER_ID:
-                await update.message.reply_text(
-                    "⚠️ This is the permanent owner!",
-                    parse_mode=ParseMode.MARKDOWN
-                )
+                await update.message.reply_text("⚠️ This is the permanent owner!", parse_mode=ParseMode.MARKDOWN)
                 return
-            
             await db.add_admin(target_id)
-            await update.message.reply_text(
-                f"✅ **Admin Added!**\n\n"
-                f"User `{target_id}` is now an admin.",
-                reply_markup=get_admin_keyboard(),
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text(f"✅ **Admin Added!**\n\nUser `{target_id}` is now an admin.", reply_markup=get_admin_keyboard(), parse_mode=ParseMode.MARKDOWN)
             context.user_data.pop("admin_state", None)
         except ValueError:
-            await update.message.reply_text(
-                "❌ **Invalid User ID**",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text("❌ **Invalid User ID**", parse_mode=ParseMode.MARKDOWN)
         return
     
-    # Remove Admin
     if state == "remove_admin":
         try:
             target_id = int(text)
             if target_id == OWNER_ID:
-                await update.message.reply_text(
-                    "⚠️ Cannot remove permanent owner!",
-                    parse_mode=ParseMode.MARKDOWN
-                )
+                await update.message.reply_text("⚠️ Cannot remove permanent owner!", parse_mode=ParseMode.MARKDOWN)
                 return
-            
             await db.remove_admin(target_id)
-            await update.message.reply_text(
-                f"✅ **Admin Removed!**\n\n"
-                f"User `{target_id}` is no longer an admin.",
-                reply_markup=get_admin_keyboard(),
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text(f"✅ **Admin Removed!**\n\nUser `{target_id}` is no longer an admin.", reply_markup=get_admin_keyboard(), parse_mode=ParseMode.MARKDOWN)
             context.user_data.pop("admin_state", None)
         except ValueError:
-            await update.message.reply_text(
-                "❌ **Invalid User ID**",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text("❌ **Invalid User ID**", parse_mode=ParseMode.MARKDOWN)
         return
 
-# ============================================================
-# CUSTOM AMOUNT HANDLER
-# ============================================================
 async def handle_custom_amount(update, context, text):
-    """Handle custom payment amount"""
     try:
         amount = float(text)
         if amount < 50:
-            await update.message.reply_text(
-                "❌ **Minimum amount is ₹50**",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text("❌ **Minimum amount is ₹50**", parse_mode=ParseMode.MARKDOWN)
             return
         if amount > 10000:
-            await update.message.reply_text(
-                "❌ **Maximum amount is ₹10,000**",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text("❌ **Maximum amount is ₹10,000**", parse_mode=ParseMode.MARKDOWN)
             return
         
         context.user_data.pop("payment_state", None)
         await generate_payment_qr_from_message(update, context, amount)
     except ValueError:
-        await update.message.reply_text(
-            "❌ **Invalid Amount**\n\n"
-            "Send a valid number.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await update.message.reply_text("❌ **Invalid Amount**\n\nSend a valid number.", parse_mode=ParseMode.MARKDOWN)
 
 async def generate_payment_qr_from_message(update, context, amount):
-    """Generate payment QR from message"""
     user_id = update.effective_user.id
-    upi_id = os.getenv("MERCHANT_UPI")
+    upi_id = MERCHANT_UPI
     
-    payment = await db.create_payment(user_id, amount, upi_id)
-    context.user_data["pending_payment"] = payment["transaction_id"]
+    result = await generate_fampay_qr(upi_id, amount)
     
-    qr_bio = await generate_upi_qr(upi_id, amount, payment["transaction_id"])
+    if not result.get("success"):
+        order_id = f"LOCAL_{user_id}_{int(datetime.utcnow().timestamp())}"
+        qr_bio = await generate_upi_qr(upi_id, amount, order_id)
+        await db.create_payment(user_id, amount, order_id, upi_id)
+        context.user_data["pending_payment"] = order_id
+        
+        await update.message.reply_text(
+            f"💳 **Payment Initiated (Local QR)**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💵 Amount: ₹{format_price(amount)}\n"
+            f"🆔 Order ID: `{order_id}`\n"
+            f"📱 UPI: `{upi_id}`",
+            reply_markup=get_payment_keyboard(order_id),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        await update.message.reply_photo(photo=qr_bio, caption=f"💳 **Scan to Pay ₹{format_price(amount)}**")
+        return
     
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Verify Payment", callback_data="verify_payment"),
-            InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation")
-        ]
-    ]
+    order_id = result.get("order_id")
+    qr_base64 = result.get("qr_image")
+    
+    await db.create_payment(user_id, amount, order_id, upi_id)
+    context.user_data["pending_payment"] = order_id
+    
+    try:
+        if qr_base64.startswith("data:image"):
+            qr_base64 = qr_base64.split(",")[1]
+        qr_data = base64.b64decode(qr_base64)
+        qr_bio = BytesIO(qr_data)
+        qr_bio.seek(0)
+    except:
+        qr_bio = await generate_upi_qr(upi_id, amount, order_id)
     
     await update.message.reply_text(
         f"💳 **Payment Initiated**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💵 Amount: ₹{format_price(amount)}\n"
-        f"🆔 Txn ID: `{payment['transaction_id']}`\n"
-        f"📱 UPI: `{upi_id}`\n━━━━━━━━━━━━━━━━━━━━━━━",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        f"🆔 Order ID: `{order_id}`\n"
+        f"📱 UPI: `{upi_id}`\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Scan QR or pay to UPI ID.",
+        reply_markup=get_payment_keyboard(order_id),
         parse_mode=ParseMode.MARKDOWN
     )
-    
-    await update.message.reply_photo(
-        photo=qr_bio,
-        caption=f"💳 **Scan to Pay ₹{format_price(amount)}**"
-    )
-
-# ============================================================
-# PAGINATION HANDLER
-# ============================================================
-async def handle_pagination(query, context):
-    """Handle pagination for accounts"""
-    data = query.data
-    if data.startswith("page_"):
-        page = int(data.split("_")[1])
-        context.user_data["account_page"] = page
-        await show_accounts(query, context)
+    await update.message.reply_photo(photo=qr_bio, caption=f"💳 **Scan to Pay ₹{format_price(amount)}**")
 
 # ============================================================
 # MAIN FUNCTION
 # ============================================================
 async def main():
-    """Main bot function"""
-    # Connect to database
     await db.connect()
     
-    # Create application
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Add handlers
     application.add_handler(CommandHandler("start", start_command))
-    
-    # Callback handler
     application.add_handler(CallbackQueryHandler(callback_handler))
-    
-    # Message handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
-    # Add conversation handler for confirmations
-    application.add_handler(CallbackQueryHandler(confirm_account_purchase, pattern="^confirm_acc_"))
-    application.add_handler(CallbackQueryHandler(confirm_session_purchase, pattern="^confirm_sess_"))
-    
-    # Start bot
-    logger.info("Bot started!")
-    
-    # Use polling for Render
+    logger.info("Bot started with Service-Based Account Management!")
     await application.run_polling()
 
 if __name__ == "__main__":
