@@ -18,12 +18,15 @@ class Database:
             self.db = self.client[DATABASE_NAME]
             
             # Create indexes
-            await self.db.users.create_index("user_id", unique=True)
-            await self.db.services.create_index("name", unique=True)
-            await self.db.accounts.create_index("phone", unique=True)
-            await self.db.accounts.create_index("service_id")
-            await self.db.accounts.create_index("status")
-            await self.db.payments.create_index("order_id", unique=True)
+            try:
+                await self.db.users.create_index("user_id", unique=True)
+                await self.db.services.create_index("name", unique=True)
+                await self.db.accounts.create_index("phone", unique=True)
+                await self.db.accounts.create_index("service_id")
+                await self.db.accounts.create_index("status")
+                await self.db.payments.create_index("order_id", unique=True)
+            except Exception as e:
+                print(f"Index creation warning: {e}")
     
     # ============================================================
     # USER OPERATIONS
@@ -81,31 +84,56 @@ class Database:
         return await cursor.to_list(length=None)
     
     async def get_service(self, service_id: str) -> Optional[Dict]:
-        return await self.db.services.find_one({"_id": service_id})
+        from bson import ObjectId
+        try:
+            return await self.db.services.find_one({"_id": ObjectId(service_id)})
+        except:
+            return await self.db.services.find_one({"_id": service_id})
     
     async def get_service_by_name(self, name: str) -> Optional[Dict]:
         return await self.db.services.find_one({"name": name})
     
     async def update_service(self, service_id: str, data: Dict) -> bool:
         data["updated_at"] = datetime.utcnow()
-        result = await self.db.services.update_one(
-            {"_id": service_id},
-            {"$set": data}
-        )
+        from bson import ObjectId
+        try:
+            result = await self.db.services.update_one(
+                {"_id": ObjectId(service_id)},
+                {"$set": data}
+            )
+        except:
+            result = await self.db.services.update_one(
+                {"_id": service_id},
+                {"$set": data}
+            )
         return result.modified_count > 0
     
     async def delete_service(self, service_id: str) -> bool:
-        result = await self.db.services.update_one(
-            {"_id": service_id},
-            {"$set": {"is_active": False, "updated_at": datetime.utcnow()}}
-        )
+        from bson import ObjectId
+        try:
+            result = await self.db.services.update_one(
+                {"_id": ObjectId(service_id)},
+                {"$set": {"is_active": False, "updated_at": datetime.utcnow()}}
+            )
+        except:
+            result = await self.db.services.update_one(
+                {"_id": service_id},
+                {"$set": {"is_active": False, "updated_at": datetime.utcnow()}}
+            )
         return result.modified_count > 0
     
     async def get_service_accounts_count(self, service_id: str) -> int:
-        return await self.db.accounts.count_documents({
-            "service_id": service_id,
-            "status": "available"
-        })
+        from bson import ObjectId
+        try:
+            return await self.db.accounts.count_documents({
+                "service_id": service_id,
+                "status": "available"
+            })
+        except:
+            return await self.db.accounts.count_documents({
+                "service_id": service_id,
+                "status": "available"
+            })
     
     # ============================================================
     # ACCOUNT OPERATIONS
@@ -145,37 +173,61 @@ class Database:
         })
     
     async def purchase_account_from_service(self, service_id: str, user_id: int, price: float) -> Optional[Dict]:
-        account = await self.db.accounts.find_one_and_update(
-            {
+        from bson import ObjectId
+        
+        # Try to find and update account
+        account = None
+        try:
+            account = await self.db.accounts.find_one_and_update(
+                {
+                    "service_id": service_id,
+                    "status": "available"
+                },
+                {
+                    "$set": {
+                        "status": "sold",
+                        "sold_to": user_id,
+                        "sold_at": datetime.utcnow(),
+                        "updated_at": datetime.utcnow()
+                    }
+                },
+                return_document=True
+            )
+        except:
+            # Fallback: find and update separately
+            account = await self.db.accounts.find_one({
                 "service_id": service_id,
                 "status": "available"
-            },
-            {
-                "$set": {
-                    "status": "sold",
-                    "sold_to": user_id,
-                    "sold_at": datetime.utcnow(),
-                    "updated_at": datetime.utcnow()
-                }
-            },
-            return_document=True
-        )
+            })
+            if account:
+                await self.db.accounts.update_one(
+                    {"_id": account["_id"]},
+                    {"$set": {
+                        "status": "sold",
+                        "sold_to": user_id,
+                        "sold_at": datetime.utcnow(),
+                        "updated_at": datetime.utcnow()
+                    }}
+                )
         
         if not account:
             return None
         
+        # Deduct user balance
         user_result = await self.db.users.update_one(
             {"user_id": user_id, "balance": {"$gte": price}},
             {"$inc": {"balance": -price, "total_purchases": 1}}
         )
         
         if user_result.modified_count == 0:
+            # Revert account status
             await self.db.accounts.update_one(
                 {"_id": account["_id"]},
                 {"$set": {"status": "available", "sold_to": None, "sold_at": None}}
             )
             return None
         
+        # Update service available count
         await self.db.services.update_one(
             {"_id": service_id},
             {"$inc": {"available_accounts": -1}}
