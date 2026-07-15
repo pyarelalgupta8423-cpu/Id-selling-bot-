@@ -104,6 +104,7 @@ async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
         return {"success": False, "error": str(e)}
 
 async def verify_fampay_payment(order_id: str) -> dict:
+    """Verify payment using Fampay API"""
     api_url = os.getenv("FAMPAY_VERIFY_URL")
     api_key = os.getenv("FAMPAY_API_KEY")
     
@@ -127,6 +128,16 @@ async def verify_fampay_payment(order_id: str) -> dict:
     except Exception as e:
         logger.error(f"Payment verification error: {e}")
         return {"verified": False, "message": str(e)}
+
+# ============================================================
+# BACKWARD COMPATIBILITY WRAPPER - FIXES IMPORT ERROR
+# ============================================================
+async def verify_payment_api(order_id: str) -> dict:
+    """
+    Backward compatibility wrapper for bot.py
+    This fixes the ImportError: cannot import name 'verify_payment_api'
+    """
+    return await verify_fampay_payment(order_id)
 
 async def generate_upi_qr(upi_id: str, amount: float, order_id: str) -> BytesIO:
     upi_string = f"upi://pay?pa={upi_id}&pn=PremiumStore&am={amount}&cu=INR&tn={order_id}"
