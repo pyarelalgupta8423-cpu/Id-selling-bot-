@@ -497,7 +497,7 @@ async def handle_payment_callback(query, context):
     except:
         await query.answer("Invalid amount", alert=True)
 
-async def generate_payment_qr(query, context, amount):
+
 async def generate_payment_qr(query, context, amount):
     user_id = query.from_user.id
     upi_id = MERCHANT_UPI
