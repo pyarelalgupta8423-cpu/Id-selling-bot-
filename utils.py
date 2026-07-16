@@ -17,27 +17,27 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
-# ------------------ Keyboards with Colored Buttons ------------------
+# ------------------ Keyboards with CORRECT style values ------------------
 def get_main_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("🛒 Buy Account", callback_data="buy_account", style="bg_primary")],
-        [InlineKeyboardButton("🔐 Buy Session", callback_data="buy_session", style="bg_primary")],
+        [InlineKeyboardButton("🛒 Buy Account", callback_data="buy_account", style="primary")],
+        [InlineKeyboardButton("🔐 Buy Session", callback_data="buy_session", style="primary")],
         [InlineKeyboardButton("👤 My Profile", callback_data="my_account")],
-        [InlineKeyboardButton("💰 Wallet", callback_data="add_balance", style="bg_success")],
+        [InlineKeyboardButton("💰 Wallet", callback_data="add_balance", style="success")],
         [InlineKeyboardButton("📞 Support", callback_data="support")],
         [InlineKeyboardButton("ℹ️ About", callback_data="about")]
     ]
     if user_id == int(os.getenv("OWNER_ID")):
-        keyboard.append([InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel", style="bg_danger")])
+        keyboard.append([InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel", style="danger")])
     return InlineKeyboardMarkup(keyboard)
 
 def get_admin_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("📋 Account Services", callback_data="admin_account_services")],
         [InlineKeyboardButton("📋 Session Services", callback_data="admin_session_services")],
-        [InlineKeyboardButton("➕ New Account Service", callback_data="admin_new_account_service", style="bg_success")],
-        [InlineKeyboardButton("➕ New Session Service", callback_data="admin_new_session_service", style="bg_success")],
-        [InlineKeyboardButton("💰 Add Funds", callback_data="admin_add_funds", style="bg_primary")],
+        [InlineKeyboardButton("➕ New Account Service", callback_data="admin_new_account_service", style="success")],
+        [InlineKeyboardButton("➕ New Session Service", callback_data="admin_new_session_service", style="success")],
+        [InlineKeyboardButton("💰 Add Funds", callback_data="admin_add_funds", style="primary")],
         [InlineKeyboardButton("📊 Stats", callback_data="admin_stats")],
         [InlineKeyboardButton("📢 Announce", callback_data="admin_announce")],
         [InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")],
@@ -49,15 +49,15 @@ def get_admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 def get_cancel_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation", style="bg_danger")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation", style="danger")]])
 
 def get_payment_keyboard(order_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Verify Payment", callback_data=f"verify_pay_{order_id}", style="bg_success")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation", style="bg_danger")]
+        [InlineKeyboardButton("✅ Verify Payment", callback_data=f"verify_pay_{order_id}", style="success")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation", style="danger")]
     ])
 
-# ------------------ Fampay API ------------------
+# ------------------ Fampay API (unchanged) ------------------
 async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
     api_url = os.getenv("FAMPAY_QR_URL")
     try:
