@@ -20,12 +20,18 @@ def escape_markdown(text: str) -> str:
 # ------------------ Keyboards with Coloured Buttons ------------------
 def get_main_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("🛒 Buy Account", callback_data="buy_account", style="primary")],
-        [InlineKeyboardButton("🔐 Buy Session", callback_data="buy_session", style="primary")],
-        [InlineKeyboardButton("👤 My Profile", callback_data="my_account")],
-        [InlineKeyboardButton("💰 Wallet", callback_data="add_balance", style="success")],
-        [InlineKeyboardButton("📞 Support", callback_data="support")],
-        [InlineKeyboardButton("ℹ️ About", callback_data="about")]
+        [
+            InlineKeyboardButton("🛒 Buy Account", callback_data="buy_account", style="primary"),
+            InlineKeyboardButton("🔐 Buy Session", callback_data="buy_session", style="primary")
+        ],
+        [
+            InlineKeyboardButton("👤 My Profile", callback_data="my_account"),
+            InlineKeyboardButton("💰 Wallet", callback_data="add_balance", style="success")
+        ],
+        [
+            InlineKeyboardButton("📞 Support", callback_data="support"),
+            InlineKeyboardButton("ℹ️ About", callback_data="about")
+        ]
     ]
     if user_id == int(os.getenv("OWNER_ID")):
         keyboard.append([InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel", style="danger")])
