@@ -57,7 +57,7 @@ def get_payment_keyboard(order_id: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation", style="danger")]
     ])
 
-# ------------------ Fampay API (unchanged) ------------------
+# ------------------ Fampay API ------------------
 async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
     api_url = os.getenv("FAMPAY_QR_URL")
     try:
