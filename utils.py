@@ -68,11 +68,16 @@ async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
                 if response.status == 200:
                     data = await response.json()
                     if data.get("status") == "success":
+                        qr_data = data.get("data", {})
                         return {
                             "success": True,
-                            "order_id": data.get("order_id"),
-                            "qr_image": data.get("qr_code"),
-                            "expires_in": data.get("expires_in", 300)
+                            "order_id": qr_data.get("order_id"),
+                            "qr_url": qr_data.get("qr_url"),  # Changed from qr_code
+                            "qr_image": qr_data.get("qr_url"),  # For compatibility
+                            "upi_id": qr_data.get("upi_id"),
+                            "amount": qr_data.get("amount"),
+                            "expires_at": qr_data.get("expires_at_ist"),
+                            "expires_in": 300
                         }
                     else:
                         return {"success": False, "error": data.get("message", "QR generation failed")}
@@ -81,30 +86,6 @@ async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
     except Exception as e:
         logger.error(f"QR generation error: {e}")
         return {"success": False, "error": str(e)}
-
-async def verify_fampay_payment(order_id: str) -> dict:
-    api_url = os.getenv("FAMPAY_VERIFY_URL")
-    api_key = os.getenv("FAMPAY_API_KEY")
-    try:
-        url = f"{api_url}?order_id={order_id}&api_key={api_key}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get("status") == "success":
-                        return {
-                            "verified": data.get("verified", False),
-                            "amount": data.get("amount", 0),
-                            "transaction_id": data.get("transaction_id"),
-                            "message": data.get("message", "")
-                        }
-                    else:
-                        return {"verified": False, "message": data.get("message", "Verification failed")}
-                else:
-                    return {"verified": False, "message": f"API Error: {response.status}"}
-    except Exception as e:
-        logger.error(f"Payment verification error: {e}")
-        return {"verified": False, "message": str(e)}
 
 async def verify_payment_api(order_id: str) -> dict:
     return await verify_fampay_payment(order_id)
