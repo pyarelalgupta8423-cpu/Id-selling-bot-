@@ -498,9 +498,11 @@ async def handle_payment_callback(query, context):
         await query.answer("Invalid amount", alert=True)
 
 async def generate_payment_qr(query, context, amount):
+async def generate_payment_qr(query, context, amount):
     user_id = query.from_user.id
     upi_id = MERCHANT_UPI
     result = await generate_fampay_qr(upi_id, amount)
+    
     if not result.get("success"):
         order_id = f"LOCAL_{user_id}_{int(datetime.utcnow().timestamp())}"
         await db.create_payment(user_id, amount, order_id, upi_id)
@@ -511,26 +513,54 @@ async def generate_payment_qr(query, context, amount):
             parse_mode=ParseMode.MARKDOWN
         )
         return
+    
     order_id = result["order_id"]
-    qr_base64 = result["qr_image"]
+    qr_url = result.get("qr_url")  # Get the QR URL from API response
+    
     await db.create_payment(user_id, amount, order_id, upi_id)
     context.user_data["pending_payment"] = order_id
-    # send QR
+    
+    # Send QR from URL
     try:
-        if qr_base64.startswith("data:image"):
-            qr_base64 = qr_base64.split(",")[1]
-        qr_data = base64.b64decode(qr_base64)
-        qr_bio = BytesIO(qr_data)
-        qr_bio.seek(0)
-        await query.message.reply_photo(photo=qr_bio, caption=f"💳 Scan to pay ₹{format_price(amount)}")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(qr_url) as response:
+                if response.status == 200:
+                    qr_data = await response.read()
+                    qr_bio = BytesIO(qr_data)
+                    qr_bio.seek(0)
+                    await query.message.reply_photo(
+                        photo=qr_bio,
+                        caption=f"💳 **Scan to Pay ₹{format_price(amount)}**\n\n"
+                                f"UPI: `{upi_id}`\n"
+                                f"Order ID: `{order_id}`"
+                    )
+                else:
+                    await query.message.reply_text(
+                        f"💳 **Payment Details**\n\n"
+                        f"UPI: `{upi_id}`\n"
+                        f"Amount: ₹{format_price(amount)}\n"
+                        f"Order ID: `{order_id}`\n\n"
+                        f"Pay to the UPI ID above and click Verify."
+                    )
     except Exception as e:
         logger.error(f"QR send failed: {e}")
+        await query.message.reply_text(
+            f"💳 **Payment Details**\n\n"
+            f"UPI: `{upi_id}`\n"
+            f"Amount: ₹{format_price(amount)}\n"
+            f"Order ID: `{order_id}`\n\n"
+            f"Pay to the UPI ID above and click Verify."
+        )
+    
     await query.edit_message_text(
-        f"💳 **Payment Initiated**\nOrder ID: `{order_id}`\nUPI: `{upi_id}`\nAfter payment click Verify.",
+        f"💳 **Payment Initiated**\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💵 Amount: ₹{format_price(amount)}\n"
+        f"🆔 Order ID: `{order_id}`\n"
+        f"📱 UPI: `{upi_id}`\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"After payment, click 'Verify Payment'.",
         reply_markup=get_payment_keyboard(order_id),
         parse_mode=ParseMode.MARKDOWN
     )
-
 async def verify_payment(query, context):
     user_id = query.from_user.id
     order_id = query.data.split("_")[2]
