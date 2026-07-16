@@ -1,7 +1,7 @@
 import os
 import aiohttp
 from io import BytesIO
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,27 +17,27 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
-# ------------------ Keyboards with Coloured Buttons ------------------
-def get_main_keyboard(user_id: int) -> InlineKeyboardMarkup:
+# ------------------ Reply Keyboard (Persistent) ------------------
+def get_main_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
-        [
-            InlineKeyboardButton("🛒 Buy Account", callback_data="buy_account", style="primary"),
-            InlineKeyboardButton("🔐 Buy Session", callback_data="buy_session", style="primary")
-        ],
-        [
-            InlineKeyboardButton("👤 My Profile", callback_data="my_account"),
-            InlineKeyboardButton("💰 Wallet", callback_data="add_balance", style="success")
-        ],
-        [
-            InlineKeyboardButton("📞 Support", callback_data="support"),
-            InlineKeyboardButton("ℹ️ About", callback_data="about")
-        ]
+        ["🛒 Buy Account", "🔐 Buy Session"],
+        ["👤 My Profile", "💰 Wallet"],
+        ["📞 Support", "ℹ️ About"]
     ]
-    if user_id == int(os.getenv("OWNER_ID")):
-        keyboard.append([InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel", style="danger")])
-    return InlineKeyboardMarkup(keyboard)
+    # Admin panel button is added dynamically in the start command based on user_id
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
-def get_admin_keyboard() -> InlineKeyboardMarkup:
+def get_admin_reply_keyboard() -> ReplyKeyboardMarkup:
+    keyboard = [
+        ["🛒 Buy Account", "🔐 Buy Session"],
+        ["👤 My Profile", "💰 Wallet"],
+        ["📞 Support", "ℹ️ About"],
+        ["⚙️ Admin Panel"]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+
+# ------------------ Inline Keyboards (for other contexts) ------------------
+def get_admin_inline_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("📋 Account Services", callback_data="admin_account_services")],
         [InlineKeyboardButton("📋 Session Services", callback_data="admin_session_services")],
@@ -54,10 +54,10 @@ def get_admin_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_cancel_keyboard() -> InlineKeyboardMarkup:
+def get_cancel_inline_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation", style="danger")]])
 
-def get_payment_keyboard(order_id: str) -> InlineKeyboardMarkup:
+def get_payment_inline_keyboard(order_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Verify Payment", callback_data=f"verify_pay_{order_id}", style="success")],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation", style="danger")]
@@ -90,9 +90,6 @@ async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
         logger.error(f"QR generation error: {e}")
         return {"success": False, "error": str(e)}
 
-# ============================================================
-# FIXED: Correctly parses the nested "data" object
-# ============================================================
 async def verify_fampay_payment(order_id: str) -> dict:
     api_url = os.getenv("FAMPAY_VERIFY_URL")
     api_key = os.getenv("FAMPAY_API_KEY")
