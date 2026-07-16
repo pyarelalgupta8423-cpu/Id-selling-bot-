@@ -1,4 +1,3 @@
-# utils.py - Helper Functions (No pillow dependency)
 import os
 import aiohttp
 import base64
@@ -19,49 +18,33 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
+# ------------------ Keyboards ------------------
 def get_main_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [
-        [
-            InlineKeyboardButton("🛒 Buy Account", callback_data="buy_account"),
-            InlineKeyboardButton("👤 My Account", callback_data="my_account")
-        ],
-        [
-            InlineKeyboardButton("💰 Add Balance", callback_data="add_balance"),
-            InlineKeyboardButton("📞 Support", callback_data="support")
-        ],
-        [
-            InlineKeyboardButton("ℹ️ About", callback_data="about")
-        ]
+        [InlineKeyboardButton("🛒 Buy Account", callback_data="buy_account")],
+        [InlineKeyboardButton("🔐 Buy Session", callback_data="buy_session")],
+        [InlineKeyboardButton("👤 My Profile", callback_data="my_account")],
+        [InlineKeyboardButton("💰 Wallet", callback_data="add_balance")],
+        [InlineKeyboardButton("📞 Support", callback_data="support")],
+        [InlineKeyboardButton("ℹ️ About", callback_data="about")]
     ]
-    
     if user_id == int(os.getenv("OWNER_ID")):
-        keyboard.append([
-            InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel")
-        ])
-    
+        keyboard.append([InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel")])
     return InlineKeyboardMarkup(keyboard)
 
 def get_admin_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [
-            InlineKeyboardButton("📋 Services", callback_data="admin_services"),
-            InlineKeyboardButton("➕ New Service", callback_data="admin_new_service")
-        ],
-        [
-            InlineKeyboardButton("💰 Add Funds", callback_data="admin_add_funds"),
-            InlineKeyboardButton("📊 Stats", callback_data="admin_stats")
-        ],
-        [
-            InlineKeyboardButton("📢 Announce", callback_data="admin_announce"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")
-        ],
-        [
-            InlineKeyboardButton("👥 Users", callback_data="admin_users"),
-            InlineKeyboardButton("🔑 Admins", callback_data="admin_admins")
-        ],
-        [
-            InlineKeyboardButton("💳 Payments", callback_data="admin_payments")
-        ],
+        [InlineKeyboardButton("📋 Account Services", callback_data="admin_account_services")],
+        [InlineKeyboardButton("📋 Session Services", callback_data="admin_session_services")],
+        [InlineKeyboardButton("➕ New Account Service", callback_data="admin_new_account_service")],
+        [InlineKeyboardButton("➕ New Session Service", callback_data="admin_new_session_service")],
+        [InlineKeyboardButton("💰 Add Funds", callback_data="admin_add_funds")],
+        [InlineKeyboardButton("📊 Stats", callback_data="admin_stats")],
+        [InlineKeyboardButton("📢 Announce", callback_data="admin_announce")],
+        [InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")],
+        [InlineKeyboardButton("👥 Users", callback_data="admin_users")],
+        [InlineKeyboardButton("🔑 Admins", callback_data="admin_admins")],
+        [InlineKeyboardButton("💳 Payments", callback_data="admin_payments")],
         [InlineKeyboardButton("🔙 Back", callback_data="start_back")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -75,12 +58,9 @@ def get_payment_keyboard(order_id: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation")]
     ])
 
-# ============================================================
-# FAMPAY PAYMENT API
-# ============================================================
+# ------------------ Fampay API ------------------
 async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
     api_url = os.getenv("FAMPAY_QR_URL")
-    
     try:
         url = f"{api_url}?upi={upi_id}&amount={amount}"
         async with aiohttp.ClientSession() as session:
@@ -105,7 +85,6 @@ async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
 async def verify_fampay_payment(order_id: str) -> dict:
     api_url = os.getenv("FAMPAY_VERIFY_URL")
     api_key = os.getenv("FAMPAY_API_KEY")
-    
     try:
         url = f"{api_url}?order_id={order_id}&api_key={api_key}"
         async with aiohttp.ClientSession() as session:
@@ -127,22 +106,8 @@ async def verify_fampay_payment(order_id: str) -> dict:
         logger.error(f"Payment verification error: {e}")
         return {"verified": False, "message": str(e)}
 
-# ============================================================
-# BACKWARD COMPATIBILITY WRAPPER
-# ============================================================
 async def verify_payment_api(order_id: str) -> dict:
-    """Backward compatibility wrapper for bot.py"""
     return await verify_fampay_payment(order_id)
-
-async def generate_upi_qr(upi_id: str, amount: float, order_id: str) -> BytesIO:
-    """
-    Generate QR code as text fallback (no pillow dependency)
-    Returns a BytesIO with QR data
-    """
-    # Return a placeholder - Fampay API will be used primarily
-    # This is just a fallback
-    from io import BytesIO
-    return BytesIO(b"QR_placeholder")
 
 async def check_force_channel(context, user_id: int) -> bool:
     force_channel = os.getenv("FORCE_CHANNEL")
