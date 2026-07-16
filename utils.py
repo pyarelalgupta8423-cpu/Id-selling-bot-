@@ -1,6 +1,5 @@
 import os
 import aiohttp
-import base64
 from io import BytesIO
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import logging
@@ -18,27 +17,27 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
-# ------------------ Keyboards ------------------
+# ------------------ Keyboards with Colored Buttons ------------------
 def get_main_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("🛒 Buy Account", callback_data="buy_account")],
-        [InlineKeyboardButton("🔐 Buy Session", callback_data="buy_session")],
+        [InlineKeyboardButton("🛒 Buy Account", callback_data="buy_account", style="bg_primary")],
+        [InlineKeyboardButton("🔐 Buy Session", callback_data="buy_session", style="bg_primary")],
         [InlineKeyboardButton("👤 My Profile", callback_data="my_account")],
-        [InlineKeyboardButton("💰 Wallet", callback_data="add_balance")],
+        [InlineKeyboardButton("💰 Wallet", callback_data="add_balance", style="bg_success")],
         [InlineKeyboardButton("📞 Support", callback_data="support")],
         [InlineKeyboardButton("ℹ️ About", callback_data="about")]
     ]
     if user_id == int(os.getenv("OWNER_ID")):
-        keyboard.append([InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel")])
+        keyboard.append([InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel", style="bg_danger")])
     return InlineKeyboardMarkup(keyboard)
 
 def get_admin_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("📋 Account Services", callback_data="admin_account_services")],
         [InlineKeyboardButton("📋 Session Services", callback_data="admin_session_services")],
-        [InlineKeyboardButton("➕ New Account Service", callback_data="admin_new_account_service")],
-        [InlineKeyboardButton("➕ New Session Service", callback_data="admin_new_session_service")],
-        [InlineKeyboardButton("💰 Add Funds", callback_data="admin_add_funds")],
+        [InlineKeyboardButton("➕ New Account Service", callback_data="admin_new_account_service", style="bg_success")],
+        [InlineKeyboardButton("➕ New Session Service", callback_data="admin_new_session_service", style="bg_success")],
+        [InlineKeyboardButton("💰 Add Funds", callback_data="admin_add_funds", style="bg_primary")],
         [InlineKeyboardButton("📊 Stats", callback_data="admin_stats")],
         [InlineKeyboardButton("📢 Announce", callback_data="admin_announce")],
         [InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")],
@@ -50,12 +49,12 @@ def get_admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 def get_cancel_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation", style="bg_danger")]])
 
 def get_payment_keyboard(order_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Verify Payment", callback_data=f"verify_pay_{order_id}")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation")]
+        [InlineKeyboardButton("✅ Verify Payment", callback_data=f"verify_pay_{order_id}", style="bg_success")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation", style="bg_danger")]
     ])
 
 # ------------------ Fampay API ------------------
@@ -72,7 +71,7 @@ async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
                         return {
                             "success": True,
                             "order_id": qr_data.get("order_id"),
-                            "qr_url": qr_data.get("qr_url"),   # <-- important
+                            "qr_url": qr_data.get("qr_url"),
                             "upi_id": qr_data.get("upi_id"),
                             "amount": qr_data.get("amount"),
                             "expires_at": qr_data.get("expires_at_ist"),
@@ -86,7 +85,6 @@ async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
         return {"success": False, "error": str(e)}
 
 async def verify_fampay_payment(order_id: str) -> dict:
-    """Verify payment using Fampay API"""
     api_url = os.getenv("FAMPAY_VERIFY_URL")
     api_key = os.getenv("FAMPAY_API_KEY")
     try:
@@ -110,7 +108,6 @@ async def verify_fampay_payment(order_id: str) -> dict:
         logger.error(f"Payment verification error: {e}")
         return {"verified": False, "message": str(e)}
 
-# Backward compatibility wrapper (used by bot.py)
 async def verify_payment_api(order_id: str) -> dict:
     return await verify_fampay_payment(order_id)
 
