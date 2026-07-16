@@ -17,7 +17,7 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
-# ------------------ Keyboards with CORRECT style values ------------------
+# ------------------ Keyboards with Coloured Buttons ------------------
 def get_main_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("🛒 Buy Account", callback_data="buy_account", style="primary")],
@@ -84,6 +84,9 @@ async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
         logger.error(f"QR generation error: {e}")
         return {"success": False, "error": str(e)}
 
+# ============================================================
+# FIXED: Correctly parses the nested "data" object
+# ============================================================
 async def verify_fampay_payment(order_id: str) -> dict:
     api_url = os.getenv("FAMPAY_VERIFY_URL")
     api_key = os.getenv("FAMPAY_API_KEY")
@@ -94,14 +97,21 @@ async def verify_fampay_payment(order_id: str) -> dict:
                 if response.status == 200:
                     data = await response.json()
                     if data.get("status") == "success":
+                        payment = data.get("data", {})
                         return {
-                            "verified": data.get("verified", False),
-                            "amount": data.get("amount", 0),
-                            "transaction_id": data.get("transaction_id"),
-                            "message": data.get("message", "")
+                            "verified": True,
+                            "amount": float(payment.get("amount", 0)),
+                            "transaction_id": payment.get("transaction_id"),
+                            "utr": payment.get("utr"),
+                            "sender_name": payment.get("sender_name"),
+                            "payment_time": payment.get("payment_time_ist"),
+                            "message": "Payment verified"
                         }
                     else:
-                        return {"verified": False, "message": data.get("message", "Verification failed")}
+                        return {
+                            "verified": False,
+                            "message": data.get("message", "Payment not received")
+                        }
                 else:
                     return {"verified": False, "message": f"API Error: {response.status}"}
     except Exception as e:
