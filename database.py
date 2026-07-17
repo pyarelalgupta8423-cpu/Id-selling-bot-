@@ -16,7 +16,6 @@ class Database:
         if not self.client:
             self.client = AsyncIOMotorClient(MONGODB_URI)
             self.db = self.client[DATABASE_NAME]
-            # Indexes
             await self.db.users.create_index("user_id", unique=True)
             await self.db.account_services.create_index("name", unique=True)
             await self.db.account_services.create_index("platform")
@@ -62,7 +61,7 @@ class Database:
         user = await self.get_user(user_id)
         return user.get("balance", 0.0) if user else 0.0
 
-    # ------------------ Account Services (with platform) ------------------
+    # ------------------ Account Services ------------------
     async def create_account_service(self, name: str, price: float, platform: str = "telegram", description: str = "") -> Dict:
         service = {
             "name": name,
@@ -114,7 +113,7 @@ class Database:
     async def get_account_service_available_count(self, service_id: str) -> int:
         return await self.db.accounts.count_documents({"service_id": service_id, "status": "available"})
 
-    # ------------------ Accounts (phones) ------------------
+    # ------------------ Accounts ------------------
     async def add_account_to_service(self, service_id: str, phone: str) -> Dict:
         account = {
             "service_id": service_id,
@@ -129,6 +128,20 @@ class Database:
         account["_id"] = str(result.inserted_id)
         await self.db.account_services.update_one({"_id": ObjectId(service_id)}, {"$inc": {"total_items": 1, "available_items": 1}})
         return account
+
+    # ---------- NEW: Save session string and 2FA password ----------
+    async def save_account_session(self, phone: str, session_string: str, two_fa_password: str = None) -> bool:
+        update_data = {
+            "session_string": session_string,
+            "updated_at": datetime.utcnow()
+        }
+        if two_fa_password is not None:
+            update_data["two_fa_password"] = two_fa_password
+        result = await self.db.accounts.update_one(
+            {"phone": phone},
+            {"$set": update_data}
+        )
+        return result.modified_count > 0
 
     async def get_available_accounts(self, service_id: str, limit: int = 10) -> List[Dict]:
         cursor = self.db.accounts.find({"service_id": service_id, "status": "available"}).limit(limit)
@@ -299,12 +312,8 @@ class Database:
 
     # ------------------ Purchase History ------------------
     async def get_purchase_history(self, user_id: int) -> List[Dict]:
-        """Fetch all purchases (accounts and sessions) for a user."""
-        # Accounts
         accounts = await self.db.accounts.find({"sold_to": user_id, "status": {"$in": ["sold", "deleted"]}}).to_list(length=None)
-        # Sessions
         sessions = await self.db.session_items.find({"sold_to": user_id, "status": {"$in": ["sold", "deleted"]}}).to_list(length=None)
-        # Combine and sort by sold_at
         purchases = []
         for acc in accounts:
             service = await self.get_account_service(acc["service_id"])
@@ -326,7 +335,6 @@ class Database:
                 "sold_at": sess["sold_at"],
                 "status": sess["status"]
             })
-        # Sort by sold_at descending
         purchases.sort(key=lambda x: x["sold_at"], reverse=True)
         return purchases
 
