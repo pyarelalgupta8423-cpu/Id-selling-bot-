@@ -16,15 +16,19 @@ class Database:
         if not self.client:
             self.client = AsyncIOMotorClient(MONGODB_URI)
             self.db = self.client[DATABASE_NAME]
+            # Indexes
             await self.db.users.create_index("user_id", unique=True)
             await self.db.account_services.create_index("name", unique=True)
+            await self.db.account_services.create_index("platform")
             await self.db.accounts.create_index("phone", unique=True)
             await self.db.accounts.create_index("service_id")
             await self.db.accounts.create_index("status")
+            await self.db.accounts.create_index("sold_to")
             await self.db.session_services.create_index("name", unique=True)
             await self.db.session_items.create_index("session_string", unique=True)
             await self.db.session_items.create_index("service_id")
             await self.db.session_items.create_index("status")
+            await self.db.session_items.create_index("sold_to")
             await self.db.payments.create_index("order_id", unique=True)
 
     # ------------------ Users ------------------
@@ -58,11 +62,12 @@ class Database:
         user = await self.get_user(user_id)
         return user.get("balance", 0.0) if user else 0.0
 
-    # ------------------ Account Services (unchanged) ------------------
-    async def create_account_service(self, name: str, price: float, description: str = "") -> Dict:
+    # ------------------ Account Services (with platform) ------------------
+    async def create_account_service(self, name: str, price: float, platform: str = "telegram", description: str = "") -> Dict:
         service = {
             "name": name,
             "price": price,
+            "platform": platform,
             "description": description,
             "type": "account",
             "is_active": True,
@@ -75,8 +80,11 @@ class Database:
         service["_id"] = str(result.inserted_id)
         return service
 
-    async def get_all_account_services(self) -> List[Dict]:
-        cursor = self.db.account_services.find({"is_active": True, "type": "account"}).sort("name", 1)
+    async def get_all_account_services(self, platform: Optional[str] = None) -> List[Dict]:
+        query = {"is_active": True, "type": "account"}
+        if platform:
+            query["platform"] = platform
+        cursor = self.db.account_services.find(query).sort("name", 1)
         return await cursor.to_list(length=None)
 
     async def get_account_service(self, service_id: str) -> Optional[Dict]:
@@ -255,17 +263,15 @@ class Database:
         )
         return result.modified_count > 0
 
-    # ------------------ Admin (fixed add_admin) ------------------
+    # ------------------ Admin ------------------
     async def get_admins(self) -> List[int]:
         cursor = self.db.users.find({"is_owner": True})
         admins = await cursor.to_list(length=None)
         return [admin["user_id"] for admin in admins]
 
     async def add_admin(self, user_id: int) -> bool:
-        # Ensure user exists first
         existing = await self.get_user(user_id)
         if not existing:
-            # Create user with default values (balance 0, etc.)
             await self.create_user(user_id, username="", full_name="")
         result = await self.db.users.update_one(
             {"user_id": user_id},
@@ -290,5 +296,38 @@ class Database:
     async def get_settings(self, key: str) -> Optional[Any]:
         setting = await self.db.settings.find_one({"key": key})
         return setting.get("value") if setting else None
+
+    # ------------------ Purchase History ------------------
+    async def get_purchase_history(self, user_id: int) -> List[Dict]:
+        """Fetch all purchases (accounts and sessions) for a user."""
+        # Accounts
+        accounts = await self.db.accounts.find({"sold_to": user_id, "status": {"$in": ["sold", "deleted"]}}).to_list(length=None)
+        # Sessions
+        sessions = await self.db.session_items.find({"sold_to": user_id, "status": {"$in": ["sold", "deleted"]}}).to_list(length=None)
+        # Combine and sort by sold_at
+        purchases = []
+        for acc in accounts:
+            service = await self.get_account_service(acc["service_id"])
+            purchases.append({
+                "type": "account",
+                "service_name": service["name"] if service else "Unknown",
+                "item": acc["phone"],
+                "price": service["price"] if service else 0,
+                "sold_at": acc["sold_at"],
+                "status": acc["status"]
+            })
+        for sess in sessions:
+            service = await self.get_session_service(sess["service_id"])
+            purchases.append({
+                "type": "session",
+                "service_name": service["name"] if service else "Unknown",
+                "item": f"Session #{str(sess['_id'])[:8]}",
+                "price": service["price"] if service else 0,
+                "sold_at": sess["sold_at"],
+                "status": sess["status"]
+            })
+        # Sort by sold_at descending
+        purchases.sort(key=lambda x: x["sold_at"], reverse=True)
+        return purchases
 
 db = Database()
