@@ -1,7 +1,7 @@
 import os
 import aiohttp
 from io import BytesIO
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,26 +17,26 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
-# ------------------ Reply Keyboard (Persistent) ------------------
+# ------------------ Reply Keyboards ------------------
 def get_main_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
-        ["🛒 Buy Account", "🔐 Buy Session"],
-        ["👤 My Profile", "💰 Wallet"],
-        ["📞 Support", "ℹ️ About"]
+        ["🛒 Buy Telegram", "🔐 Buy Session"],
+        ["💬 Buy WhatsApp", "👤 My Profile"],
+        ["💰 Wallet", "📞 Support"],
+        ["📜 History"]
     ]
-    # Admin panel button is added dynamically in the start command based on user_id
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 def get_admin_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
-        ["🛒 Buy Account", "🔐 Buy Session"],
-        ["👤 My Profile", "💰 Wallet"],
-        ["📞 Support", "ℹ️ About"],
-        ["⚙️ Admin Panel"]
+        ["🛒 Buy Telegram", "🔐 Buy Session"],
+        ["💬 Buy WhatsApp", "👤 My Profile"],
+        ["💰 Wallet", "📞 Support"],
+        ["📜 History", "⚙️ Admin Panel"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
-# ------------------ Inline Keyboards (for other contexts) ------------------
+# ------------------ Inline Keyboards ------------------
 def get_admin_inline_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("📋 Account Services", callback_data="admin_account_services")],
@@ -61,6 +61,13 @@ def get_payment_inline_keyboard(order_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Verify Payment", callback_data=f"verify_pay_{order_id}", style="success")],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation", style="danger")]
+    ])
+
+# ---------- NEW: Logout button after OTP ----------
+def get_logout_inline_keyboard(account_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔴 Logout & Remove", callback_data=f"logout_acc_{account_id}", style="danger")],
+        [InlineKeyboardButton("🏠 Main Menu", callback_data="start_back")]
     ])
 
 # ------------------ Fampay API ------------------
