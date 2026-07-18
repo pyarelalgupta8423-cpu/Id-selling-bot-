@@ -97,7 +97,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Force channel error: {e}")
 
-     = f"💎 *Welcome to OTP BAZAAR* 💎
+     welcome = f"💎 *Welcome to OTP BAZAAR* 💎
 
 Hello {escape_markdown(user.full_name)}! 👋
 
