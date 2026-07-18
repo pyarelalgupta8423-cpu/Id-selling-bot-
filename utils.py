@@ -63,19 +63,21 @@ def get_payment_inline_keyboard(order_id: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_operation", style="danger")]
     ])
 
-# ---------- NEW: Logout button after OTP ----------
 def get_logout_inline_keyboard(account_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔴 Logout & Remove", callback_data=f"logout_acc_{account_id}", style="danger")],
         [InlineKeyboardButton("🏠 Main Menu", callback_data="start_back")]
     ])
 
-# ------------------ Fampay API ------------------
+# ------------------ Fampay API (with timeouts) ------------------
 async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
     api_url = os.getenv("FAMPAY_QR_URL")
+    if not api_url:
+        return {"success": False, "error": "FAMPAY_QR_URL not set"}
     try:
         url = f"{api_url}?upi={upi_id}&amount={amount}"
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as response:
                 if response.status == 200:
                     data = await response.json()
@@ -100,9 +102,12 @@ async def generate_fampay_qr(upi_id: str, amount: float) -> dict:
 async def verify_fampay_payment(order_id: str) -> dict:
     api_url = os.getenv("FAMPAY_VERIFY_URL")
     api_key = os.getenv("FAMPAY_API_KEY")
+    if not api_url or not api_key:
+        return {"verified": False, "message": "Payment API not configured"}
     try:
         url = f"{api_url}?order_id={order_id}&api_key={api_key}"
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as response:
                 if response.status == 200:
                     data = await response.json()
@@ -131,12 +136,16 @@ async def verify_fampay_payment(order_id: str) -> dict:
 async def verify_payment_api(order_id: str) -> dict:
     return await verify_fampay_payment(order_id)
 
+# ------------------ Force Channel (reads from DB) ------------------
 async def check_force_channel(context, user_id: int) -> bool:
-    force_channel = os.getenv("FORCE_CHANNEL")
+    from database import db  # local import to avoid circular
+    force_channel = await db.get_settings("force_channel") or os.getenv("FORCE_CHANNEL")
     if not force_channel:
         return True
     try:
         member = await context.bot.get_chat_member(int(force_channel), user_id)
         return member.status not in ["left", "kicked"]
-    except:
-        return False
+    except Exception as e:
+        logger.error(f"Force channel check error for {user_id}: {e}")
+        # If bot can't check, allow (to prevent blocking due to bot permissions)
+        return True
