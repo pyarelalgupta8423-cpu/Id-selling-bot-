@@ -97,7 +97,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Force channel error: {e}")
 
-    welcome = f"🌟 **Welcome {escape_markdown(user.full_name)}!**\n\nWelcome to **Premium Account Store**.\nUse the buttons below."
+     = f"💎 *Welcome to OTP BAZAAR* 💎
+
+Hello {escape_markdown(user.full_name)}! 👋
+
+Welcome to **OTP BAZAAR** – Your Trusted Premium OTP Marketplace.
+
+⚡ Instant OTP Delivery
+🔒 Secure & Reliable
+🌍 Worldwide OTP Services
+💎 Premium Quality at Best Prices
+
+Choose an option below to get started."
     admins = await db.get_admins()
     if user.id in admins:
         reply_markup = get_admin_reply_keyboard()
