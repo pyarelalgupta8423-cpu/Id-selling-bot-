@@ -15,7 +15,7 @@ class Database:
 
     async def connect(self):
         if not self.client:
-            self.client = AsyncIOMotorClient(MONGODB_URI)
+            self.client = AsyncIOMotorClient(MONGODB_URI, maxPoolSize=50)
             self.db = self.client[DATABASE_NAME]
             await self.db.users.create_index("user_id", unique=True)
             await self.db.account_services.create_index("name", unique=True)
@@ -122,6 +122,8 @@ class Database:
             "status": "available",
             "sold_to": None,
             "sold_at": None,
+            "session_string": None,
+            "two_fa_password": None,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
         }
@@ -149,22 +151,35 @@ class Database:
         return await cursor.to_list(length=limit)
 
     async def purchase_account_from_service(self, service_id: str, user_id: int, price: float) -> Optional[Dict]:
-        account = await self.db.accounts.find_one_and_update(
-            {"service_id": service_id, "status": "available"},
-            {"$set": {"status": "sold", "sold_to": user_id, "sold_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
-            return_document=ReturnDocument.AFTER
-        )
-        if not account:
-            return None
-        user_result = await self.db.users.update_one(
-            {"user_id": user_id, "balance": {"$gte": price}},
-            {"$inc": {"balance": -price, "total_purchases": 1}}
-        )
-        if user_result.modified_count == 0:
-            await self.db.accounts.update_one({"_id": account["_id"]}, {"$set": {"status": "available", "sold_to": None, "sold_at": None}})
-            return None
-        await self.db.account_services.update_one({"_id": ObjectId(service_id)}, {"$inc": {"available_items": -1}})
-        return account
+        # Retry loop to handle race condition
+        for _ in range(3):
+            # Find and set account to sold atomically
+            account = await self.db.accounts.find_one_and_update(
+                {"service_id": service_id, "status": "available"},
+                {"$set": {"status": "sold", "sold_to": user_id, "sold_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
+                return_document=ReturnDocument.AFTER
+            )
+            if not account:
+                return None
+
+            # Attempt to deduct balance
+            user_result = await self.db.users.update_one(
+                {"user_id": user_id, "balance": {"$gte": price}},
+                {"$inc": {"balance": -price, "total_purchases": 1}}
+            )
+            if user_result.modified_count > 0:
+                # Success – update service stock
+                await self.db.account_services.update_one({"_id": ObjectId(service_id)}, {"$inc": {"available_items": -1}})
+                return account
+            else:
+                # Balance insufficient or concurrent update – revert account status
+                await self.db.accounts.update_one(
+                    {"_id": account["_id"]},
+                    {"$set": {"status": "available", "sold_to": None, "sold_at": None}}
+                )
+                # Wait a bit and retry
+                await asyncio.sleep(0.1)
+        return None
 
     async def get_account_by_phone(self, phone: str) -> Optional[Dict]:
         return await self.db.accounts.find_one({"phone": phone})
@@ -238,22 +253,28 @@ class Database:
         return await cursor.to_list(length=limit)
 
     async def purchase_session_from_service(self, service_id: str, user_id: int, price: float) -> Optional[Dict]:
-        item = await self.db.session_items.find_one_and_update(
-            {"service_id": service_id, "status": "available"},
-            {"$set": {"status": "sold", "sold_to": user_id, "sold_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
-            return_document=ReturnDocument.AFTER
-        )
-        if not item:
-            return None
-        user_result = await self.db.users.update_one(
-            {"user_id": user_id, "balance": {"$gte": price}},
-            {"$inc": {"balance": -price, "total_purchases": 1}}
-        )
-        if user_result.modified_count == 0:
-            await self.db.session_items.update_one({"_id": item["_id"]}, {"$set": {"status": "available", "sold_to": None, "sold_at": None}})
-            return None
-        await self.db.session_services.update_one({"_id": ObjectId(service_id)}, {"$inc": {"available_items": -1}})
-        return item
+        for _ in range(3):
+            item = await self.db.session_items.find_one_and_update(
+                {"service_id": service_id, "status": "available"},
+                {"$set": {"status": "sold", "sold_to": user_id, "sold_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
+                return_document=ReturnDocument.AFTER
+            )
+            if not item:
+                return None
+            user_result = await self.db.users.update_one(
+                {"user_id": user_id, "balance": {"$gte": price}},
+                {"$inc": {"balance": -price, "total_purchases": 1}}
+            )
+            if user_result.modified_count > 0:
+                await self.db.session_services.update_one({"_id": ObjectId(service_id)}, {"$inc": {"available_items": -1}})
+                return item
+            else:
+                await self.db.session_items.update_one(
+                    {"_id": item["_id"]},
+                    {"$set": {"status": "available", "sold_to": None, "sold_at": None}}
+                )
+                await asyncio.sleep(0.1)
+        return None
 
     # ------------------ Payments ------------------
     async def create_payment(self, user_id: int, amount: float, order_id: str, upi_id: str) -> Dict:
