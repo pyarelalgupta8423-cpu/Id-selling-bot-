@@ -3,6 +3,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime
 from typing import Optional, Dict, List, Any
 from bson import ObjectId
+from pymongo import ReturnDocument
 
 MONGODB_URI = os.getenv("MONGODB_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "telegram_id_store")
@@ -16,7 +17,6 @@ class Database:
         if not self.client:
             self.client = AsyncIOMotorClient(MONGODB_URI)
             self.db = self.client[DATABASE_NAME]
-            # Indexes
             await self.db.users.create_index("user_id", unique=True)
             await self.db.account_services.create_index("name", unique=True)
             await self.db.account_services.create_index("platform")
@@ -139,9 +139,10 @@ class Database:
             update_data["two_fa_password"] = two_fa_password
         result = await self.db.accounts.update_one(
             {"phone": phone},
-            {"$set": update_data}
+            {"$set": update_data},
+            upsert=True
         )
-        return result.modified_count > 0
+        return result.modified_count > 0 or result.upserted_id is not None
 
     async def get_available_accounts(self, service_id: str, limit: int = 10) -> List[Dict]:
         cursor = self.db.accounts.find({"service_id": service_id, "status": "available"}).limit(limit)
@@ -151,7 +152,7 @@ class Database:
         account = await self.db.accounts.find_one_and_update(
             {"service_id": service_id, "status": "available"},
             {"$set": {"status": "sold", "sold_to": user_id, "sold_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
-            return_document=True
+            return_document=ReturnDocument.AFTER
         )
         if not account:
             return None
@@ -240,7 +241,7 @@ class Database:
         item = await self.db.session_items.find_one_and_update(
             {"service_id": service_id, "status": "available"},
             {"$set": {"status": "sold", "sold_to": user_id, "sold_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
-            return_document=True
+            return_document=ReturnDocument.AFTER
         )
         if not item:
             return None
