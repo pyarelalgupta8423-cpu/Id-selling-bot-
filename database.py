@@ -16,6 +16,7 @@ class Database:
         if not self.client:
             self.client = AsyncIOMotorClient(MONGODB_URI)
             self.db = self.client[DATABASE_NAME]
+            # Indexes
             await self.db.users.create_index("user_id", unique=True)
             await self.db.account_services.create_index("name", unique=True)
             await self.db.account_services.create_index("platform")
@@ -129,7 +130,6 @@ class Database:
         await self.db.account_services.update_one({"_id": ObjectId(service_id)}, {"$inc": {"total_items": 1, "available_items": 1}})
         return account
 
-    # ---------- NEW: Save session string and 2FA password ----------
     async def save_account_session(self, phone: str, session_string: str, two_fa_password: str = None) -> bool:
         update_data = {
             "session_string": session_string,
@@ -164,6 +164,9 @@ class Database:
             return None
         await self.db.account_services.update_one({"_id": ObjectId(service_id)}, {"$inc": {"available_items": -1}})
         return account
+
+    async def get_account_by_phone(self, phone: str) -> Optional[Dict]:
+        return await self.db.accounts.find_one({"phone": phone})
 
     # ------------------ Session Services ------------------
     async def create_session_service(self, name: str, price: float, description: str = "") -> Dict:
